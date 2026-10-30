@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VPSForge - Control Panel</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #6366f1;
+      --dark: #0f172a;
+      --sidebar: #1e293b;
+      --bg: #f1f5f9;
+    }
+    body { 
+      background: var(--bg); 
+      font-family: 'Segoe UI', system-ui, sans-serif; 
+      transition: background 0.3s;
+    }
+    .sidebar { background: var(--sidebar); min-height: 100vh; color: white; }
+    .sidebar a { color: #cbd5e1; text-decoration: none; padding: 12px 20px; display: block; border-radius: 8px; margin: 4px 10px; }
+    .sidebar a:hover, .sidebar a.active { background: var(--primary); color: white; }
+    .card { border: none; border-radius: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
+    .stat-card { background: linear-gradient(135deg, var(--primary), #8b5cf6); color: white; }
+    .btn-primary { background: var(--primary); border: none; }
+    .navbar-brand { font-weight: 700; font-size: 1.4rem; }
+    .bg-gif {
+      background-size: cover;
+      background-position: center;
+      background-attachment: fixed;
+    }
+    #editorSection { display: none; }
+    .admin-only { display: none; }
+  </style>
+</head>
+<body>
+  <div class="d-flex">
+    <!-- Sidebar -->
+    <div class="sidebar p-3" style="width: 260px;">
+      <div class="text-center mb-4 mt-2">
+        <h4 class="text-white" id="logoText"><i class="fas fa-server me-2"></i>VPSForge</h4>
+        <small class="text-secondary">Control Panel</small>
+      </div>
+      <a href="#" class="active" onclick="showSection('dashboard')"><i class="fas fa-tachometer-alt me-2"></i> Dashboard</a>
+      <a href="#" onclick="showSection('nodes')"><i class="fas fa-network-wired me-2"></i> Nodes</a>
+      <a href="#" onclick="showSection('vps')"><i class="fas fa-desktop me-2"></i> Virtual Servers</a>
+      <a href="#" onclick="showSection('users')"><i class="fas fa-users me-2"></i> Users</a>
+      <a href="#" onclick="showSection('files')"><i class="fas fa-folder-open me-2"></i> File Manager</a>
+      <a href="#" class="admin-only" onclick="showSection('editor')"><i class="fas fa-paint-brush me-2"></i> VPanel Editor</a>
+      <a href="#" onclick="showSection('settings')"><i class="fas fa-cog me-2"></i> Settings</a>
+      <hr class="bg-secondary">
+      <a href="#"><i class="fas fa-sign-out-alt me-2"></i> Logout</a>
+    </div>
+
+    <!-- Main Content -->
+    <div class="flex-grow-1 p-4">
+      <!-- Dashboard -->
+      <div id="dashboardSection">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+          <h3 id="panelTitle">Dashboard</h3>
+          <span class="badge bg-success">All Systems Operational</span>
+        </div>
+        <div class="row g-4 mb-4">
+          <div class="col-md-3">
+            <div class="card stat-card p-3">
+              <div class="d-flex justify-content-between">
+                <div><h5>12</h5><small>Total VPS</small></div>
+                <i class="fas fa-server fa-2x opacity-75"></i>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-3">
+            <div class="card p-3">
+              <div class="d-flex justify-content-between">
+                <div><h5>4</h5><small>Nodes Online</small></div>
+                <i class="fas fa-hdd fa-2x text-primary"></i>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-3">
+            <div class="card p-3">
+              <div class="d-flex justify-content-between">
+                <div><h5>48</h5><small>CPU Cores</small></div>
+                <i class="fas fa-microchip fa-2x text-info"></i>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-3">
+            <div class="card p-3">
+              <div class="d-flex justify-content-between">
+                <div><h5>256 GB</h5><small>RAM Available</small></div>
+                <i class="fas fa-memory fa-2x text-warning"></i>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header bg-white d-flex justify-content-between">
+            <h5 class="mb-0"><i class="fas fa-desktop me-2"></i>Virtual Servers</h5>
+            <button class="btn btn-success btn-sm"><i class="fas fa-plus me-1"></i> Create VPS</button>
+          </div>
+          <div class="card-body">
+            <table class="table table-hover">
+              <thead><tr><th>Hostname</th><th>Node</th><th>Type</th><th>IP</th><th>CPU/RAM</th><th>Status</th><th>Actions</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td>web-01</td><td>Local Node</td><td>KVM</td><td>192.168.1.101</td><td>2C / 4GB</td>
+                  <td><span class="badge bg-success">Running</span></td>
+                  <td>
+                    <button class="btn btn-sm btn-outline-secondary" title="SSH"><i class="fas fa-terminal"></i></button>
+                    <button class="btn btn-sm btn-outline-secondary" title="File Manager"><i class="fas fa-folder"></i></button>
+                    <button class="btn btn-sm btn-outline-danger"><i class="fas fa-power-off"></i></button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- VPanel Editor (Admin Only) -->
+      <div id="editorSection">
+        <h3 class="mb-4"><i class="fas fa-paint-brush me-2"></i>VPanel Editor <span class="badge bg-danger">Admin Only</span></h3>
+        <div class="card">
+          <div class="card-body">
+            <form id="themeForm">
+              <div class="row">
+                <div class="col-md-6 mb-3">
+                  <label class="form-label">Panel Name / Logo Text</label>
+                  <input type="text" class="form-control" id="panelName" value="VPSForge">
+                </div>
+                <div class="col-md-6 mb-3">
+                  <label class="form-label">Accent Color</label>
+                  <input type="color" class="form-control form-control-color" id="accentColor" value="#6366f1">
+                </div>
+                <div class="col-md-6 mb-3">
+                  <label class="form-label">Background Color</label>
+                  <input type="color" class="form-control form-control-color" id="bgColor" value="#f1f5f9">
+                </div>
+                <div class="col-md-6 mb-3">
+                  <label class="form-label">Background Image / GIF URL</label>
+                  <input type="url" class="form-control" id="bgImage" placeholder="https://example.com/background.gif">
+                  <small class="text-muted">Leave empty for solid color. Direct GIF or image URL supported.</small>
+                </div>
+              </div>
+              <button type="button" class="btn btn-primary" onclick="saveTheme()">Save Theme</button>
+              <button type="button" class="btn btn-outline-secondary ms-2" onclick="resetTheme()">Reset to Default</button>
+            </form>
+            <div class="mt-4">
+              <h6>Live Preview</h6>
+              <div id="previewBox" class="p-4 rounded border" style="height: 120px; background: #f1f5f9;">
+                <strong id="previewName">VPSForge</strong> – Theme Preview
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Other sections placeholders -->
+      <div id="nodesSection" style="display:none;"><h3>Nodes</h3><p>Node management will appear here.</p></div>
+      <div id="vpsSection" style="display:none;"><h3>Virtual Servers</h3><p>VPS list will appear here.</p></div>
+      <div id="usersSection" style="display:none;"><h3>Users</h3><p>User management will appear here.</p></div>
+      <div id="filesSection" style="display:none;"><h3>File Manager</h3><p>File manager will appear here.</p></div>
+      <div id="settingsSection" style="display:none;"><h3>Settings</h3><p>General settings.</p></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    // Simulate admin login (in real panel this comes from backend session)
+    const isAdmin = true; // Change to false to hide editor for non-admins
+    if (isAdmin) {
+      document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'block');
+    }
+
+    function showSection(section) {
+      document.querySelectorAll('[id$="Section"]').forEach(el => el.style.display = 'none');
+      const target = document.getElementById(section + 'Section');
+      if (target) target.style.display = 'block';
+      if (section === 'editor' && !isAdmin) {
+        alert('Access denied. Admin only.');
+        showSection('dashboard');
+      }
+    }
+
+    function saveTheme() {
+      const name = document.getElementById('panelName').value || 'VPSForge';
+      const accent = document.getElementById('accentColor').value;
+      const bgColor = document.getElementById('bgColor').value;
+      const bgImage = document.getElementById('bgImage').value;
+
+      document.documentElement.style.setProperty('--primary', accent);
+      document.documentElement.style.setProperty('--bg', bgColor);
+      document.getElementById('logoText').innerHTML = `<i class="fas fa-server me-2"></i>${name}`;
+      document.getElementById('panelTitle').textContent = 'Dashboard';
+      document.getElementById('previewName').textContent = name;
+
+      if (bgImage) {
+        document.body.style.backgroundImage = `url('${bgImage}')`;
+        document.body.classList.add('bg-gif');
+        document.body.style.backgroundColor = '';
+      } else {
+        document.body.style.backgroundImage = 'none';
+        document.body.classList.remove('bg-gif');
+        document.body.style.backgroundColor = bgColor;
+      }
+
+      // Save to localStorage
+      localStorage.setItem('vpsforge_theme', JSON.stringify({ name, accent, bgColor, bgImage }));
+      alert('Theme saved successfully!');
+    }
+
+    function resetTheme() {
+      localStorage.removeItem('vpsforge_theme');
+      location.reload();
+    }
+
+    // Load saved theme on start
+    window.addEventListener('load', () => {
+      const saved = localStorage.getItem('vpsforge_theme');
+      if (saved) {
+        const theme = JSON.parse(saved);
+        document.getElementById('panelName').value = theme.name || 'VPSForge';
+        document.getElementById('accentColor').value = theme.accent || '#6366f1';
+        document.getElementById('bgColor').value = theme.bgColor || '#f1f5f9';
+        document.getElementById('bgImage').value = theme.bgImage || '';
+        saveTheme(); // apply without alert
+      }
+      showSection('dashboard');
+    });
+  </script>
+</body>
+</html>
