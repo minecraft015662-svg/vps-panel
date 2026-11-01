@@ -27,12 +27,49 @@ ONLINE_SECS = 30
 SESSION_SECS = 7 * 24 * 3600
 CMD_TIMEOUT = 1800
 
-BUSY = {"installing", "starting", "stopping", "restarting", "reinstalling"}
-SERVER_OWNED = ("st", "ssh", "err", "cname", "sshwait", "step", "cpu_pct", "mem_mb", "disk_mb")
+BUSY = {"installing", "starting", "stopping", "restarting", "reinstalling", "restoring"}
+# fields the browser may never overwrite (the server is the only writer)
+SERVER_OWNED = ("st", "ssh", "err", "cname", "sshwait", "step", "cpu_pct", "mem_mb", "disk_mb",
+                "cpus", "mem", "disk", "plan", "os", "bk_limit", "port_limit", "ports", "bk", "sd")
+
+OS_LABELS = {"ubuntu20": "Ubuntu 20.04 LTS", "ubuntu22": "Ubuntu 22.04 LTS", "ubuntu24": "Ubuntu 24.04 LTS",
+             "debian11": "Debian 11", "debian12": "Debian 12", "debian13": "Debian 13",
+             "rocky9": "Rocky Linux 9", "alma9": "AlmaLinux 9"}
+DEF_OS, DEF_BK, DEF_PORTS = "ubuntu22", 2, 5   # defaults: OS, backups allowed, ports allowed per VPS
 
 lock = threading.Lock()
 sessions = {}  # sid -> (user id, expiry)
 results = {}   # file-manager command id -> (time, ok, output)
+
+
+def plan_str(v):
+    return "%d vCPU, %d GB RAM, %d GB disk" % (v["cpus"], v["mem"], v["disk"])
+
+
+def norm_vps(v):
+    """Make sure every VPS has the OS / limit / port / backup fields (old data has none)."""
+    if v.get("os") not in OS_LABELS:
+        v["os"] = DEF_OS
+    v.setdefault("bk_limit", DEF_BK)
+    v.setdefault("port_limit", DEF_PORTS)
+    v.setdefault("sd", 0)   # 1 = the VPS runs systemd (created by agent v5 or newer)
+    if not isinstance(v.get("ports"), list):
+        v["ports"] = []
+    if not isinstance(v.get("bk"), list):
+        v["bk"] = []
+    v["bk"] = [b for b in v["bk"] if isinstance(b, dict) and isinstance(b.get("id"), int)]
+    return v
+
+
+def num(d, key, lo, hi, dflt):
+    raw = d.get(key)
+    if raw is None or raw == "":
+        return dflt
+    try:
+        n = int(float(raw))
+    except (TypeError, ValueError):
+        raise ValueError("%s must be a number" % key)
+    return max(lo, min(hi, n))
 
 
 def hash_pw(pw, salt=None):
@@ -67,6 +104,8 @@ def load_state():
                 d = json.load(f)
             for k, v in default_state().items():
                 d.setdefault(k, v)
+            for v in d.get("vps", []):
+                norm_vps(v)
             return d
         except Exception:
             continue
@@ -167,7 +206,8 @@ def enqueue(node_id, op, vps, args):
 
 def run_args(v):
     return {"cname": v["cname"], "name": v["name"], "cpus": v["cpus"], "mem": v["mem"], "disk": v["disk"],
-            "panel": v.get("panel", "Nova Cloud"), "host": v.get("host", "nova")}
+            "panel": v.get("panel", "Nova Cloud"), "host": v.get("host", "nova"),
+            "os": v.get("os", DEF_OS)}
 
 
 def clean_info(d):
@@ -184,7 +224,7 @@ def create_vps(d):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", name):
         raise ValueError("VPS name: 1-32 letters, numbers, - or _")
     if str(d.get("type", "docker")) != "docker":
-        raise ValueError("Only Docker VPS are supported right now")
+        raise ValueError("Only Docker (systemd) VPS are supported right now. KVM is not available yet")
     node = find(state["nodes"], d.get("node"))
     if not node:
         raise ValueError("Select a node")
@@ -196,12 +236,18 @@ def create_vps(d):
     disk = max(1, min(100000, int(d.get("disk") or 40)))
     panel = re.sub(r"[^A-Za-z0-9 ._-]", "", str(d.get("panel") or "Nova Cloud")).strip()[:30] or "Nova Cloud"
     host = re.sub(r"[^a-z0-9]", "", panel.lower())[:20] or "nova"
+    os_key = str(d.get("os") or DEF_OS)
+    if os_key not in OS_LABELS:
+        raise ValueError("Unknown operating system")
+    bk_limit = num(d, "bk_limit", 0, 50, DEF_BK)
+    port_limit = num(d, "port_limit", 0, 100, DEF_PORTS)
     vid = state["nid"]
     state["nid"] += 1
     v = {"id": vid, "name": name, "panel": panel, "host": host, "user": owner["id"] if owner else 1, "node": node["id"],
          "type": "docker", "cpus": cpus, "mem": mem, "disk": disk,
          "plan": "%d vCPU, %d GB RAM, %d GB disk" % (cpus, mem, disk),
-         "st": "installing", "cname": "nova-%d" % vid, "err": "", "ssh": ""}
+         "st": "installing", "cname": "nova-%d" % vid, "err": "", "ssh": "",
+         "os": os_key, "bk_limit": bk_limit, "port_limit": port_limit, "ports": [], "bk": []}
     state["vps"].append(v)
     enqueue(node["id"], "create", v, run_args(v))
     save_state()
@@ -216,7 +262,7 @@ def vps_op(vid, op, user):
     if op == "delete":
         state["vps"].remove(v)
         if node:
-            enqueue(node["id"], "delete", v, {"cname": v["cname"]})
+            enqueue(node["id"], "delete", v, {"cname": v["cname"], "imgs": [b.get("img") for b in v.get("bk", []) if b.get("img")]})
         save_state()
         return v
     if not node or not online(node):
@@ -273,10 +319,12 @@ def apply_result(cmd, ok, out):
     if not v:
         return
     v["step"] = ""
-    if cmd["op"] in ("create", "reinstall"):
+    if cmd["op"] in ("create", "reinstall") and ok:
+        v["sd"] = 1
+    if cmd["op"] in ("create", "reinstall", "restore"):
         notify(v["user"], "VPS " + ("ready" if ok else "failed"), "%s: %s" % (v["name"], "your VPS is running." if ok else out[:120]))
     op = cmd["op"]
-    if op in ("create", "start", "restart", "reinstall"):
+    if op in ("create", "start", "restart", "reinstall", "restore"):
         v["st"] = "running" if ok else "error"
         v["err"] = "" if ok else out[:300]
     elif op == "stop":
@@ -288,6 +336,25 @@ def apply_result(cmd, ok, out):
         v["err"] = "" if ok else out[:300]
     elif op == "sshx_stop":
         v["ssh"] = ""
+    elif op == "backup":
+        b = find(v.get("bk", []), cmd["args"].get("bid"))
+        if b:
+            if ok:
+                m = re.search(r"\d+", out)
+                b["st"] = "ready"
+                b["size"] = int(m.group(0)) if m else 0
+                notify(v["user"], "Backup ready", "%s: %s" % (v["name"], b["n"]))
+            else:
+                v["bk"].remove(b)
+                v["err"] = out[:300]
+                notify(v["user"], "Backup failed", "%s: %s" % (v["name"], out[:120]))
+    elif op == "resize" and not ok:
+        for k, val in (cmd["args"].get("old") or {}).items():
+            if k in ("cpus", "mem", "disk"):
+                v[k] = val
+        v["plan"] = plan_str(v)
+        v["err"] = out[:300]
+        notify(v["user"], "Resize failed", "%s: %s" % (v["name"], out[:120]))
 
 
 def sweep_and_sync(node, containers, stats=None):
@@ -361,6 +428,174 @@ def fs_wait(c, timeout=40):
     with lock:
         c["status"] = "error"
     return False, "The node did not answer in time"
+
+
+def vps_extra(vid, op, d, user):
+    """edit (admin), ports (admin), backup / restore / bkdel (owner or admin)."""
+    v = find(state["vps"], vid)
+    admin = user["role"] == "admin"
+    if not v or (not admin and v["user"] != user["id"]):
+        raise LookupError("VPS not found")
+    norm_vps(v)
+    node = find(state["nodes"], v["node"])
+    if op in ("edit", "ports") and not admin:
+        raise PermissionError("Only an administrator can do this")
+
+    if op == "ports":
+        act = str(d.get("act"))
+        try:
+            port = int(d.get("port"))
+        except (TypeError, ValueError):
+            raise ValueError("Enter a port between 1 and 65535")
+        if not 1 <= port <= 65535:
+            raise ValueError("Enter a port between 1 and 65535")
+        if act == "add":
+            if any(p.get("p") == port for p in v["ports"]):
+                raise ValueError("This port is already open")
+            if any(o is not v and o["node"] == v["node"] and any(p.get("p") == port for p in o.get("ports", []))
+                   for o in state["vps"]):
+                raise ValueError("Port %d is already used by another VPS on this node" % port)
+            if len(v["ports"]) >= v["port_limit"]:
+                raise ValueError("Port limit reached: this VPS may use %d port%s"
+                                 % (v["port_limit"], "" if v["port_limit"] == 1 else "s"))
+            label = re.sub(r"[^\w .-]", "", str(d.get("label") or "")).strip()[:30] or "Custom"
+            v["ports"].append({"p": port, "n": label})
+        elif act == "del":
+            v["ports"] = [p for p in v["ports"] if p.get("p") != port]
+        else:
+            raise LookupError("Unknown action")
+        save_state()
+        return v
+
+    if op == "edit":
+        name = str(d.get("name", v["name"])).strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", name):
+            raise ValueError("VPS name: 1-32 letters, numbers, - or _")
+        owner = find(state["users"], d.get("user", v["user"]))
+        if not owner:
+            raise ValueError("Select an owner")
+        cpus = num(d, "cpus", 1, 64, v["cpus"])
+        mem = num(d, "mem", 1, 1024, v["mem"])
+        disk = num(d, "disk", 1, 100000, v["disk"])
+        os_key = str(d.get("os") or v["os"])
+        if os_key not in OS_LABELS:
+            raise ValueError("Unknown operating system")
+        bk_limit = num(d, "bk_limit", 0, 50, v["bk_limit"])
+        port_limit = num(d, "port_limit", 0, 100, v["port_limit"])
+        if bk_limit < len(v["bk"]):
+            raise ValueError("This VPS already has %d backups. Delete some first" % len(v["bk"]))
+        if port_limit < len(v["ports"]):
+            raise ValueError("This VPS already has %d open ports. Close some first" % len(v["ports"]))
+        os_changed = os_key != v["os"]
+        res_changed = (cpus, mem, disk) != (v["cpus"], v["mem"], v["disk"])
+        if os_changed or res_changed:
+            if not node or not online(node):
+                raise ValueError("The node of this VPS must be online to change its OS or resources")
+            if v["st"] in BUSY:
+                raise ValueError("VPS is busy (%s). Wait for it to finish" % v["st"])
+        old = {"cpus": v["cpus"], "mem": v["mem"], "disk": v["disk"]}
+        v.update(name=name, user=owner["id"], cpus=cpus, mem=mem, disk=disk,
+                 bk_limit=bk_limit, port_limit=port_limit)
+        v["plan"] = plan_str(v)
+        if os_changed:
+            v["os"] = os_key
+            v["st"] = "reinstalling"
+            v["err"] = ""
+            v["ssh"] = ""
+            v["sshwait"] = False
+            enqueue(node["id"], "reinstall", v, run_args(v))
+        elif res_changed:
+            enqueue(node["id"], "resize", v, {"cname": v["cname"], "cpus": cpus, "mem": mem, "disk": disk, "old": old})
+        save_state()
+        return v
+
+    if op == "bkdel":
+        b = find(v["bk"], d.get("id"))
+        if not b:
+            raise LookupError("Backup not found")
+        if b.get("st") == "creating":
+            raise ValueError("Wait until the backup is finished")
+        if v["st"] == "restoring":
+            raise ValueError("The VPS is restoring a backup right now")
+        v["bk"].remove(b)
+        if node:
+            enqueue(node["id"], "bkdel", v, {"cname": v["cname"], "img": b.get("img", "")})
+        save_state()
+        return v
+
+    if op in ("backup", "restore"):
+        if not node or not online(node):
+            raise ValueError("The node of this VPS is not online")
+        if v["st"] in BUSY:
+            raise ValueError("VPS is busy (%s). Wait for it to finish" % v["st"])
+        if any(b.get("st") == "creating" for b in v["bk"]):
+            raise ValueError("A backup is being created. Wait for it to finish")
+        if op == "backup":
+            if v["st"] not in ("running", "stopped"):
+                raise ValueError("The VPS must be running or stopped to take a backup")
+            if v["bk_limit"] <= 0:
+                raise ValueError("Backups are not enabled for this VPS. Ask the administrator")
+            if len(v["bk"]) >= v["bk_limit"]:
+                raise ValueError("Backup limit reached: this VPS may keep %d backup%s. Delete one first"
+                                 % (v["bk_limit"], "" if v["bk_limit"] == 1 else "s"))
+            bid = state["nid"]
+            state["nid"] += 1
+            b = {"id": bid, "n": "backup-" + time.strftime("%Y%m%d-%H%M%S"), "t": time.time(), "size": 0,
+                 "st": "creating", "img": "nova-bk-%d-%d" % (v["id"], bid)}
+            v["bk"].append(b)
+            enqueue(node["id"], "backup", v, {"cname": v["cname"], "img": b["img"], "bid": bid})
+        else:
+            b = find(v["bk"], d.get("id"))
+            if not b or b.get("st") != "ready":
+                raise ValueError("Backup not found or not ready")
+            v["st"] = "restoring"
+            v["err"] = ""
+            v["ssh"] = ""
+            v["sshwait"] = False
+            a = run_args(v)
+            a["img"] = b["img"]
+            enqueue(node["id"], "restore", v, a)
+        save_state()
+        return v
+    raise LookupError("Unknown action")
+
+
+def edit_user(uid, d):
+    u = find(state["users"], uid)
+    if not u:
+        raise LookupError("User not found")
+    if u["id"] == 1:
+        raise ValueError("The built-in admin is changed in /etc/nova-cloud/panel.env")
+    name = str(d.get("username", u.get("username") or u.get("name", ""))).strip()
+    email = str(d.get("email", u.get("email", ""))).strip().lower()[:80]
+    pw = str(d.get("password") or "")
+    role = str(d.get("role", u.get("role", "user")))
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{3,20}", name):
+        raise ValueError("Username: 3-20 letters, numbers, . - or _")
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise ValueError("Enter a valid email")
+    if role not in ("user", "admin"):
+        raise ValueError("Role must be user or admin")
+    if pw and len(pw) < 6:
+        raise ValueError("Password must be at least 6 characters")
+    others = [x for x in state["users"] if x is not u]
+    if email == ADMIN_USER.lower() or any(str(x.get("email", "")).lower() == email for x in others):
+        raise ValueError("This email is already used by another user")
+    if name.lower() == ADMIN_USER.lower() or any(
+            str(x.get("username") or x.get("name", "")).lower() == name.lower() for x in others):
+        raise ValueError("This username is already taken")
+    u["name"] = u["username"] = name
+    u["email"] = email
+    u["role"] = role
+    if pw:
+        u["pw"] = hash_pw(pw)
+        for k in [k for k, (i, _) in sessions.items() if i == u["id"]]:
+            del sessions[k]
+        save_sessions()
+        notify(u["id"], "Password changed", "An administrator changed your password.")
+    state["rev"] += 1
+    save_state()
+    return u
 
 
 def register(d):
@@ -541,6 +776,14 @@ class H(BaseHTTPRequestHandler):
                     save_state()
                 return self.send_json(200, {"ok": True})
 
+            if path.startswith("/api/admin/user/"):
+                user = self.authed()
+                if not user or user["role"] != "admin":
+                    return self.send_json(401, {"error": "login required"})
+                d = self.body(10_000)
+                with lock:
+                    edit_user(path.rsplit("/", 1)[1], d)
+                return self.send_json(200, {"ok": True})
             if path == "/api/notifs/read":
                 user = self.authed()
                 if not user:
@@ -556,6 +799,11 @@ class H(BaseHTTPRequestHandler):
                 if not user:
                     return self.send_json(401, {"error": "login required"})
                 parts = path.split("/")
+                if len(parts) == 5 and parts[4] in ("edit", "ports", "backup", "restore", "bkdel"):
+                    d = self.body(10_000)
+                    with lock:
+                        v = vps_extra(parts[3], parts[4], d, user)
+                    return self.send_json(200, {"ok": True, "id": v["id"]})
                 if len(parts) == 5 and parts[4] == "fs":
                     d = self.body(8_000_000)
                     with lock:
@@ -574,6 +822,8 @@ class H(BaseHTTPRequestHandler):
                             return self.send_json(404, {"error": "not found"})
                         v = vps_op(parts[3], parts[4], user)
                 return self.send_json(200, {"ok": True, "id": v["id"]})
+        except PermissionError as e:
+            return self.send_json(403, {"error": str(e)})
         except LookupError as e:
             return self.send_json(404, {"error": str(e)})
         except ValueError as e:

@@ -192,6 +192,11 @@ node_setup() {
   apt-get update -y && apt-get install -y curl python3 docker.io qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils lxcfs || { echo "Package installation failed"; return; }
   systemctl enable --now docker
   systemctl enable --now libvirtd 2>/dev/null || true
+  # modules that Docker inside a VPS (Pterodactyl Wings) needs
+  printf 'overlay\nbr_netfilter\n' > /etc/modules-load.d/nova.conf
+  modprobe overlay 2>/dev/null; modprobe br_netfilter 2>/dev/null
+  printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-nova.conf
+  sysctl --system >/dev/null 2>&1 || true
   [ -e /dev/kvm ] || echo "Warning: /dev/kvm not found. KVM needs hardware virtualization. Docker VPS will still work."
   umask 077
   mkdir -p "$CONF"
@@ -206,7 +211,8 @@ node_setup() {
     *)   echo "Unexpected answer from the panel (HTTP $code)." ;;
   esac
   echo "Agent service: systemctl status nova-node"
-  echo "Docker VPS that run Pterodactyl need the Sysbox runtime (github.com/nestybox/sysbox)."
+  echo "VPS on this node run systemd and are privileged, so Pterodactyl Panel + Wings (Docker inside) work in them."
+  echo "Privileged = only give VPS to people you trust."
 }
 
 case "$1" in
