@@ -99,13 +99,26 @@ h2{margin:0 0 10px;font-size:18px;letter-spacing:-.01em}
 .rg{background:var(--bd);border-radius:14px;padding:14px 6px;display:grid;gap:4px}
 .rg i{display:block;width:84px;height:84px;border-radius:50%;margin:0 auto 6px;background:conic-gradient(var(--ac) calc(var(--p)*1%),var(--bd) 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 9px),#000 calc(100% - 8px));mask:radial-gradient(farthest-side,transparent calc(100% - 9px),#000 calc(100% - 8px))}
 @media(max-width:900px){.two{grid-template-columns:1fr}}
+
+.crumb{color:var(--mut);margin:0 0 12px}.crumb b{color:var(--tx)}
+.ic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;color:#fff;font-size:20px;flex:none}
+.kc{display:grid;gap:6px;justify-items:start;border-radius:18px}.kc b{font-size:34px;line-height:1}
+.sc{justify-items:center;text-align:center}
+.tb{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0}.tb input{flex:1 1 220px}
+.seg{display:inline-flex;border:1px solid var(--bd);border-radius:10px;overflow:hidden}.seg button{border:0;border-radius:0}.seg button.on{background:var(--ac);color:#fff}
+.shw{margin:6px 0 12px;color:var(--mut)}.grid.list{grid-template-columns:1fr}
+.who{display:flex;align-items:center;gap:10px}.wn{display:grid;line-height:1.15}.wn small{font-size:11px}
+.av{width:36px;height:36px;border-radius:50%;background:var(--ac);color:#fff;display:grid;place-items:center;font-weight:700}
+.bell{position:relative;border-radius:50%;padding:7px 10px}.bell i,.bd{background:#ef4444;color:#fff;border-radius:999px;font-style:normal;font-size:11px;padding:1px 6px}.bell i{position:absolute;top:-4px;right:-4px}
+.bd{margin-left:8px;float:right}
+.nt{padding:12px 6px;border-bottom:1px solid var(--bd)}.nt.un{border-left:3px solid var(--ac);padding-left:12px}
 </style>
 </head>
 <body>
 <div id="bg"></div><div id="ov"></div>
 <div class="wrap">
 <aside id="sb"><div class="brand"><span id="lg"></span><span id="bn"></span></div><nav id="nav"></nav></aside>
-<div class="mc"><header><b id="pt"></b><span class="who"><span id="who"></span> <button data-a="logout">Log out</button></span></header>
+<div class="mc"><header><b id="pt"></b><span class="who"><button class="bell" data-a="tab" data-v="notif" title="Notifications">&#128276;<i id="nb"></i></button><span class="av" id="av"></span><span class="wn"><b id="who"></b><small id="wr" class="mut"></small></span></span></header>
 <main id="app"></main></div>
 </div>
 <div id="toast" role="status"></div>
@@ -124,7 +137,7 @@ let lastSaved='',saveT=0;
 const snap=()=>JSON.stringify({users:S.users,nodes:S.nodes,vps:S.vps,nid:S.nid});
 function persist(){if(!S.auth||S.me.role!='admin')return;const j=snap();if(j===lastSaved)return;lastSaved=j;clearTimeout(saveT);
 saveT=setTimeout(()=>{fetch('/api/state',{method:'PUT',headers:{'Content-Type':'application/json'},body:j}).then(r=>{if(r.status==401){S.auth=false;render()}}).catch(()=>toast('Could not reach the panel server'))},150)}
-function load(){return fetch('/api/state').then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{S.users=d.users;S.nodes=d.nodes;S.vps=d.vps;S.nid=d.nid||10;S.me=d.me||S.me;lastSaved=snap()})}
+function load(){return fetch('/api/state').then(r=>{if(!r.ok)throw 0;return r.json()}).then(d=>{S.users=d.users;S.nodes=d.nodes;S.vps=d.vps;S.nid=d.nid||10;S.me=d.me||S.me;S.notifs=d.notifs||[];lastSaved=snap()})}
 function call(url,body){return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined}).then(r=>r.json().catch(()=>({})).then(d=>{if(!r.ok)throw d.error||'Request failed';return d}))}
 function vop(id,op){call('/api/vps/'+id+'/'+op).then(()=>load()).then(()=>render()).catch(x=>{toast(String(x));load().then(render).catch(()=>{})});return false}
 function mk(o){if(!o.name)return toast('Enter a VPS name');if(!o.node)return toast('No node is online yet. Connect a node first');o.type='docker';call('/api/vps',o).then(()=>load()).then(()=>{S.tab=S.sub=='vps'&&S.tab=='admin'?'admin':'dash';render();toast('VPS is being created')}).catch(x=>toast(String(x)));return false}
@@ -171,22 +184,27 @@ const rows=S.fl?S.fl.map(f=>'<tr><td>'+(f.d?'&#128193; <button data-a="fmgo" dat
 return '<h2>File manager</h2><div class="row"><b style="word-break:break-all;flex:1 1 200px">'+e(S.fp)+'</b><button data-a="fmup">Up</button><button data-a="fmref">Refresh</button><button data-a="fmnew">New folder</button></div><div class="row" style="margin:8px 0"><input id="ff" type="file"><small>Upload max 5 MB</small></div><div class="tw"><table><tr><th>Name</th><th>Size</th><th></th></tr>'+rows+'</table></div>'}
 const err=x=>toast(String(x));
 function home(){const q=S.vps,sum=k=>q.reduce((a,x)=>a+(+x[k]||0),0),g=new Date().getHours(),hi=g<12?'GOOD MORNING':g<17?'GOOD AFTERNOON':'GOOD EVENING',run=q.filter(x=>x.st=='running').length;
-const c=(t,v,u,sb,col)=>'<div class="sc" style="border-left-color:'+col+'"><small>'+t+'</small><b>'+v+' <small>'+u+'</small></b><span class="pill">'+sb+'</span></div>';
+const c=(t,v,u,sb,col,ic,lb)=>'<div class="sc" style="border-left-color:'+col+'"><div class="row" style="justify-content:center"><span class="ic" style="background:'+col+'">'+ic+'</span><span class="pill">'+lb+'</span></div><small>'+t+'</small><b>'+v+' <small>'+u+'</small></b><span class="pill">'+sb+'</span></div>';
 const rg=(t,key,u)=>{const tot=sum(key),r=q.filter(x=>x.st=='running').reduce((a,x)=>a+(+x[key]||0),0),p=tot?Math.round(r*100/tot):0;return '<div class="rg"><i style="--p:'+p+'"></i><small>'+t+'</small><b>'+tot+' '+u+'</b><small>'+(q.length?'across '+q.length+' VPS':'')+'</small></div>'};
-return '<div class="hero"><small>'+hi+'</small><h1>'+e(S.me.name)+'</h1><span class="pill">'+(q.length?run+' of '+q.length+' running':'No servers yet')+'</span><button data-a="tab" data-v="dash">Manage VPS</button></div><div class="st4">'+c('TOTAL VPS',q.length,'',run+' running','#3b6cf4')+c('CPU ALLOCATED',sum('cpus'),'vCPU','Across '+q.length+' VPS','#22c55e')+c('RAM ALLOCATED',sum('mem'),'GB','Reserved','#3b82f6')+c('DISK ALLOCATED',sum('disk'),'GB','Provisioned','#f59e0b')+'</div>'
+return '<div class="hero"><small>'+hi+'</small><h1>'+e(S.me.name)+'</h1><span class="pill">'+(q.length?run+' of '+q.length+' running':'No servers yet')+'</span><span class="pill">Last login '+(S.me.last?ago(S.me.last):'first time')+'</span><button data-a="tab" data-v="dash">Manage VPS</button></div><div class="st4">'+c('TOTAL VPS',q.length,'',run+' running','#3b6cf4','&#9636;','Servers')+c('CPU ALLOCATED',sum('cpus'),'vCPU','Across '+q.length+' VPS','#22c55e','&#9889;','Cores')+c('RAM ALLOCATED',sum('mem'),'GB','Reserved','#3b82f6','&#9638;','Memory')+c('DISK ALLOCATED',sum('disk'),'GB','Provisioned','#f59e0b','&#9707;','Storage')+'</div>'
 +'<div class="two"><div class="card"><h2>VPS Status</h2>'+(q.length?q.map(x=>'<div class="row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--bd)"><span>'+e(x.name)+'</span><span class="pill '+x.st+'">'+x.st+'</span></div>').join(''):'<p class="mut" style="text-align:center;padding:36px 0">No VPS to display yet.</p>')+'</div><div class="card"><h2>Resource Allocation</h2><div class="rings">'+rg('CPU','cpus','vCPU')+rg('MEMORY','mem','GB')+rg('STORAGE','disk','GB')+'</div></div></div>'}
-function tabs(){$('#nav').innerHTML=!S.auth?'':[['home','Dashboard'],['dash','My VPS'],['profile','Profile'],['admin','Admin panel'],['edit','Editor']].filter(x=>S.me.role=='admin'||x[0]=='home'||x[0]=='dash'||x[0]=='profile').map(([k,l])=>(k=='home'?'<small class="sl">MAIN</small>':k=='profile'?'<small class="sl">MANAGEMENT</small>':'')+'<button data-a="tab" data-v="'+k+'" class="'+(S.tab==k?'on':'')+'">'+l+'</button>').join('')}
+function tabs(){$('#nav').innerHTML=!S.auth?'':[['home','Dashboard'],['dash','My VPS'],['profile','Profile'],['notif','Notifications'],['admin','Admin panel'],['edit','Editor']].filter(x=>S.me.role=='admin'||x[0]=='home'||x[0]=='dash'||x[0]=='profile'||x[0]=='notif').map(([k,l])=>(k=='home'?'<small class="sl">MAIN</small>':k=='profile'?'<small class="sl">MANAGEMENT</small>':'')+'<button data-a="tab" data-v="'+k+'" class="'+(S.tab==k?'on':'')+'">'+l+(k=='notif'&&unread()?'<span class="bd">'+unread()+'</span>':'')+'</button>').join('')}
 function vcard(v){const run=v.st=='running';return '<div class="card"><div class="top"><b>'+e(v.name)+'</b><span class="pill '+v.st+'">'+v.st+'</span></div><small>'+(v.type=='kvm'?'KVM':'Docker')+', '+e(v.plan)+', node: '+e(nodeName(v.node))+'</small><br><small>Owner: '+e(userName(v.user))+'</small>'
 +'<div class="bar"><i style="width:'+(run?(v.cpu||0):0)+'%"></i></div><small>CPU '+(run?(v.cpu||0):0)+'%</small>'
 +'<div class="bar"><i style="width:'+(run?(v.ram||0):0)+'%"></i></div><small>RAM '+(run?(v.ram||0):0)+'%</small>'
 +'<div class="acts"><button class="pri" data-a="manage" data-v="'+v.id+'">Manage</button><button data-a="tog" data-v="'+v.id+'">'+(run?'Stop':'Start')+'</button><button data-a="rst" data-v="'+v.id+'">Restart</button>'+(S.me.role=='admin'?'<button class="dng" data-a="delvps" data-v="'+v.id+'">Delete</button>':'')+'</div></div>'}
-function vlist(){const q=(S.q||'').toLowerCase(),f=S.sf||'',L=S.vps.filter(v=>(!f||v.st==f)&&(!q||(v.name+' '+v.id).toLowerCase().includes(q)));
-return '<div class="mut" style="margin:6px 0 12px">Showing <b>'+L.length+'</b> of <b>'+S.vps.length+'</b> VPS</div><div class="grid">'+(L.map(vcard).join('')||'<div class="card empty"><h2>No Virtual Private Servers</h2><p class="mut">'+(S.me.role=='admin'?'Create your first VPS above.':'Contact an administrator to create a VPS for you.')+'</p></div>')+'</div>'}
-function dash(){const on=S.nodes.filter(n=>n.status=='online'),V=S.vps,n=s=>V.filter(x=>x.st==s).length;
-const k=(v,l,c)=>'<div class="card" style="border-top:3px solid '+c+'"><b style="font-size:30px">'+v+'</b><br><small>'+l+'</small></div>';
-return '<div class="st4">'+k(V.length,'TOTAL VPS','#6366f1')+k(n('running'),'RUNNING','#22c55e')+k(n('stopped'),'STOPPED','#9ca3af')+k(n('error'),'ERROR','#ec4899')+'</div><div style="height:12px"></div>'
+const unread=()=>(S.notifs||[]).filter(x=>!x.read).length;
+const ago=t=>{const s=Math.max(0,Date.now()/1000-t);return s<60?'just now':s<3600?Math.floor(s/60)+' minutes ago':s<86400?Math.floor(s/3600)+' hours ago':Math.floor(s/86400)+' days ago'};
+function notif(){const L=S.notifs||[];return '<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Notifications</h2><button data-a="nread">Mark all as read</button></div>'+(L.map(x=>'<div class="nt'+(x.read?'':' un')+'"><b>'+e(x.title)+'</b><div>'+e(x.msg)+'</div><small>'+ago(x.t)+'</small></div>').join('')||'<p class="mut" style="text-align:center;padding:30px">No notifications.</p>')+'</div>'}
+function vlist(){const q=(S.q||'').toLowerCase(),f=S.sf||'';let L=S.vps.filter(v=>(!f||v.st==f)&&(!q||(v.name+' '+v.id).toLowerCase().includes(q)));
+if(S.so=='name')L=L.slice().sort((a,b)=>a.name.localeCompare(b.name));else if(S.so=='status')L=L.slice().sort((a,b)=>a.st.localeCompare(b.st));
+return '<div class="shw">Showing <b>'+L.length+'</b> of <b>'+S.vps.length+'</b> VPS</div><div class="grid'+(S.lv?' list':'')+'">'+(L.map(vcard).join('')||'<div class="card empty"><h2>No Virtual Private Servers</h2><p class="mut">'+(S.me.role=='admin'?'Create your first VPS above.':'You have not created any VPS instances yet. Contact an administrator to create a VPS for you.')+'</p></div>')+'</div>'}
+function dash(){const V=S.vps,n=s=>V.filter(x=>x.st==s).length;
+const k=(g,i,v,l)=>'<div class="card kc"><span class="ic" style="background:'+g+'">'+i+'</span><b>'+v+'</b><small>'+l+'</small></div>';
+return '<div class="crumb">Dashboard &rsaquo; <b>My VPS</b></div><div class="hero"><h1 style="flex:1 0 100%">Your Virtual Private Servers &#128640;</h1><small style="letter-spacing:0">Manage and monitor all your VPS instances in one place</small></div>'
++'<div class="st4">'+k('linear-gradient(135deg,#6366f1,#8b5cf6)','&#9636;',V.length,'TOTAL VPS')+k('linear-gradient(135deg,#22c55e,#4ade80)','&#9654;',n('running'),'RUNNING')+k('linear-gradient(135deg,#6b7280,#4b5563)','&#9632;',n('stopped'),'STOPPED')+k('linear-gradient(135deg,#ec4899,#f472b6)','&#8856;',n('error'),'ERROR')+'</div><div style="height:12px"></div>'
 +(S.me.role!='admin'?'':'<div class="card row"><input id="nv" placeholder="VPS name"><select id="nvn">'+on.map(n=>'<option value="'+n.id+'">'+e(n.name)+'</option>').join('')+'</select><select id="nvt"><option value="docker">Docker VPS</option></select><input id="nvc" type="number" min="1" max="32" placeholder="vCPU (2)"><input id="nvm" type="number" min="1" placeholder="RAM in GB (4)"><input id="nvd" type="number" min="1" placeholder="Disk in GB (40)"><button class="pri" data-a="mkvps">Create VPS</button></div>')
-+'<div class="card row" style="margin:12px 0"><input id="vq" placeholder="Search by name or ID..." value="'+e(S.q||'')+'"><select id="vf"><option value="">All Status</option>'+['running','stopped','error','installing'].map(s=>'<option'+(S.sf==s?' selected':'')+'>'+s+'</option>').join('')+'</select></div><div id="vl">'+vlist()+'</div>'}
++'<div class="card tb"><input id="vq" placeholder="Search by name or ID..." value="'+e(S.q||'')+'"><select id="vf"><option value="">All Status</option>'+['running','stopped','error','installing'].map(s=>'<option'+(S.sf==s?' selected':'')+'>'+s+'</option>').join('')+'</select><select id="so"><option value="">Sort: Default</option><option value="name"'+(S.so=='name'?' selected':'')+'>Sort: Name</option><option value="status"'+(S.so=='status'?' selected':'')+'>Sort: Status</option></select><span class="seg"><button data-a="vw" data-v="g" class="'+(S.lv?'':'on')+'">&#9638;</button><button data-a="vw" data-v="l" class="'+(S.lv?'on':'')+'">&#9776;</button></span><button data-a="vrefresh">&#8635;</button></div><div id="vl">'+vlist()+'</div>'}
 function profile(){return '<div class="card" style="max-width:520px"><h2>Profile</h2><table style="min-width:0"><tr><td>Username</td><td>'+e(S.me.name)+'</td></tr><tr><td>Email</td><td>'+e((S.users.find(u=>u.id==S.me.id)||{}).email||'')+'</td></tr><tr><td>Role</td><td>'+e(S.me.role)+'</td></tr></table><div class="acts"><button class="dng" data-a="logout">Log out</button></div></div>'}
 const lim=5,pu=u=>S.vps.filter(x=>x.user==u).reduce((a,x)=>a+(x.ports||[]).length,0);
 const bx=(t,b,c)=>'<div class="bx"><div class="bh"><b>'+t+'</b>'+(b||'')+'</div>'+c+'</div>';
@@ -216,7 +234,7 @@ return '<div class="card"><h2>vPanel editor</h2><p class="mut">Changes apply to 
 +'<div class="fld"><label for="f-bl">Glass blur</label><input id="f-bl" type="range" min="0" max="20" value="'+b.blur+'"></div>'
 +'<h2 style="margin-top:22px">Login page</h2><div class="fld"><label for="f-llogo">Login logo</label><input id="f-llogo" type="file" accept="image/*"></div><div class="fld"><label for="f-lbg">Login background image or GIF</label><input id="f-lbg" type="file" accept="image/*"><small>Leave empty to use the main logo and background.</small></div>'
 +'<div class="acts"><button class="pri" data-a="logout">Preview login page</button><button data-a="rmbg">Remove background</button><button data-a="rmlogo">Remove logo</button><button data-a="rmlbg">Clear login images</button><button class="dng" data-a="reset">Reset all</button></div></div>'}
-function render(){if(S.auth&&S.me.role!='admin'&&!['home','profile'].includes(S.tab))S.tab='dash';persist();apply();$('#who').textContent=S.me.name||'';document.querySelector('header').style.display=S.auth?'':'none';$('#sb').style.display=S.auth?'':'none';$('.wrap').classList.toggle('out',!S.auth);$('#pt').textContent={home:'Dashboard',profile:'Profile',dash:'My Virtual Private Servers',admin:'Admin panel',edit:'Editor'}[S.tab]||'';tabs();$('#app').innerHTML=!S.auth?login():S.tab=='home'?home():S.tab=='profile'?profile():S.tab=='dash'?(S.vm?mg():dash()):S.tab=='admin'?admin():edit()}
+function render(){if(S.auth&&S.me.role!='admin'&&!['home','profile','notif'].includes(S.tab))S.tab='dash';persist();apply();$('#who').textContent=S.me.name||'';$('#wr').textContent=S.me.role=='admin'?'Admin':'User';$('#av').textContent=(S.me.name||'?')[0].toUpperCase();{const u=unread();$('#nb').textContent=u||'';$('#nb').style.display=u?'':'none'}document.querySelector('header').style.display=S.auth?'':'none';$('#sb').style.display=S.auth?'':'none';$('.wrap').classList.toggle('out',!S.auth);$('#pt').textContent={home:'Dashboard',notif:'Notifications',profile:'Profile',dash:'My Virtual Private Servers',admin:'Admin panel',edit:'Editor'}[S.tab]||'';tabs();$('#app').innerHTML=!S.auth?login():S.tab=='home'?home():S.tab=='profile'?profile():S.tab=='notif'?notif():S.tab=='dash'?(S.vm?mg():dash()):S.tab=='admin'?admin():edit()}
 const A={
 tab(v){S.tab=v;S.vm=0},sub(v){S.sub=v},
 manage(v){S.vm=+v;S.mt='info';S.fp='/root';S.fe=null},back(){S.vm=0},mt(v){S.mt=v;const q=cur();if(v=='files'&&q.st=='running')fmload(S.fp);else if(v=='term'&&q.st=='running'&&!q.ssh&&!q.sshwait)vop(q.id,'sshx')},
@@ -236,7 +254,7 @@ fmrm(p){if(!confirm('Delete '+p+' ?'))return false;fsx('rm',p).then(()=>fmload(S
 fmdl(p){fsx('get',p).then(b=>{const u=Uint8Array.from(atob(b),c=>c.charCodeAt(0)),a=document.createElement('a');a.href=URL.createObjectURL(new Blob([u]));a.download=p.split('/').pop();a.click()}).catch(err);return false},
 fmedit(p){fsx('get',p).then(b=>{S.fe={p,t:new TextDecoder().decode(Uint8Array.from(atob(b),c=>c.charCodeAt(0)))};render()}).catch(err);return false},
 fesave(){let s='';new TextEncoder().encode($('#fet').value).forEach(c=>s+=String.fromCharCode(c));fsx('write',S.fe.p,btoa(s)).then(()=>toast('Saved')).catch(err);return false},
-feclose(){S.fe=null},rmlbg(){S.brand.llogo='';S.brand.lbg='';save();apply()},
+feclose(){S.fe=null},vw(v){S.lv=v=='l'},vrefresh(){load().then(render);return false},nread(){call('/api/notifs/read').then(()=>load()).then(render);return false},rmlbg(){S.brand.llogo='';S.brand.lbg='';save();apply()},
 delf(i){cur().files.splice(+i,1)},
 addport(){const v=cur(),p=+$('#pp').value,n=$('#pl').value.trim();if(!(p>0&&p<65536))return toast('Enter a port between 1 and 65535');if(pu(v.user)>=lim)return toast('Port limit reached: '+lim+' ports per user');if(v.ports.some(x=>x.p==p))return toast('This port is already open');v.ports.push({p,n:n||'Custom'})},
 delport(i){cur().ports.splice(+i,1)},
@@ -257,7 +275,7 @@ reset(){S.brand=Object.assign({},DEF);save();apply()}
 };
 document.addEventListener('click',ev=>{const t=ev.target.closest('button[data-a]');if(!t)return;if(A[t.dataset.a](t.dataset.v)!==false)render()});
 document.addEventListener('change',ev=>{const t=ev.target;
-if(t.id=='vf'){S.sf=t.value;$('#vl').innerHTML=vlist();return}
+if(t.id=='vf'||t.id=='so'){S[t.id=='vf'?'sf':'so']=t.value;$('#vl').innerHTML=vlist();return}
 if(t.dataset.a=='own'){S.vps.find(q=>q.id==t.dataset.v).user=+t.value;toast('Owner changed');return}
 if(t.id=='ff'&&t.files[0]){const f=t.files[0];if(f.size>5242880)return toast('Max 5 MB');const r=new FileReader();r.onload=()=>{toast('Uploading...');fsx('write',jp(f.name),String(r.result).split(',')[1]).then(()=>{toast('Uploaded');fmload(S.fp)}).catch(err)};r.readAsDataURL(f);return}
 if(t.type=='file'&&t.files[0]){const k=({'f-logo':'logo','f-bg':'bg','f-llogo':'llogo','f-lbg':'lbg'})[t.id],f=t.files[0];
@@ -268,7 +286,7 @@ if(t.id=='vq'){S.q=t.value;$('#vl').innerHTML=vlist();return}
 if(t.id=='f-name')b.name=t.value;else if(t.id=='f-ac')b.accent=t.value;else if(t.id=='f-ov')b.ov=+t.value;else if(t.id=='f-bl')b.blur=+t.value;else return;
 save();apply()});
 load().then(()=>{S.auth=true}).catch(()=>{}).finally(()=>{apply();render()});
-setInterval(()=>{if(!S.auth)return;fetch('/api/state').then(r=>{if(r.status==401){S.auth=false;render();throw 0}return r.json()}).then(d=>{let ch=false;d.nodes.forEach(x=>{const n=S.nodes.find(q=>q.id==x.id);if(n&&(n.status!==x.status||JSON.stringify(n.info)!==JSON.stringify(x.info))){n.status=x.status;n.info=x.info;ch=true}});d.vps.forEach(x=>{const v=S.vps.find(q=>q.id==x.id);if(!v){S.vps.push(x);ch=true}else if(v.st!==x.st||v.ssh!==x.ssh||v.err!==x.err||v.sshwait!==x.sshwait||v.step!==x.step){v.step=x.step;v.st=x.st;v.ssh=x.ssh;v.err=x.err;v.sshwait=x.sshwait;ch=true}});S.vps=S.vps.filter(v=>d.vps.some(x=>x.id==v.id));if(ch){lastSaved=snap();render()}}).catch(()=>{})},3000);
+setInterval(()=>{if(!S.auth)return;fetch('/api/state').then(r=>{if(r.status==401){S.auth=false;render();throw 0}return r.json()}).then(d=>{let ch=false;const u0=unread();S.notifs=d.notifs||[];S.me=d.me||S.me;if(unread()!=u0)ch=true;d.nodes.forEach(x=>{const n=S.nodes.find(q=>q.id==x.id);if(n&&(n.status!==x.status||JSON.stringify(n.info)!==JSON.stringify(x.info))){n.status=x.status;n.info=x.info;ch=true}});d.vps.forEach(x=>{const v=S.vps.find(q=>q.id==x.id);if(!v){S.vps.push(x);ch=true}else if(v.st!==x.st||v.ssh!==x.ssh||v.err!==x.err||v.sshwait!==x.sshwait||v.step!==x.step){v.step=x.step;v.st=x.st;v.ssh=x.ssh;v.err=x.err;v.sshwait=x.sshwait;ch=true}});S.vps=S.vps.filter(v=>d.vps.some(x=>x.id==v.id));if(ch){lastSaved=snap();render()}}).catch(()=>{})},3000);
 </script>
 </body>
 </html>

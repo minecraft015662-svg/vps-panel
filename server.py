@@ -54,6 +54,7 @@ def default_state():
         "nid": 10,
         "cid": 1,
         "cmds": [],
+        "notifs": [],
     }
 
 
@@ -88,6 +89,12 @@ def agent_version():
         return 0
 
 
+def notify(uid, title, msg):
+    state["notifs"].append({"id": state["nid"], "user": uid, "title": title, "msg": msg, "t": time.time(), "read": False})
+    state["nid"] += 1
+    state["notifs"] = state["notifs"][-500:]
+
+
 def online(n):
     return bool(n.get("seen")) and time.time() - n["seen"] <= ONLINE_SECS
 
@@ -103,6 +110,7 @@ def view(user):
     out = json.loads(json.dumps(state))
     out.pop("cmds", None)
     out.pop("cid", None)
+    out["notifs"] = [dict(n) for n in reversed(state["notifs"]) if n["user"] == user["id"]][:50]
     for u in out["users"]:
         u.pop("pw", None)
     for n in out["nodes"]:
@@ -112,7 +120,7 @@ def view(user):
         out["vps"] = [v for v in out["vps"] if v["user"] == user["id"]]
         out["nodes"] = [{"id": n["id"], "name": n["name"], "status": n["status"]}
                         for n in out["nodes"] if any(v["node"] == n["id"] for v in out["vps"])]
-    out["me"] = {"id": user["id"], "name": user["name"], "role": user["role"]}
+    out["me"] = {"id": user["id"], "name": user["name"], "role": user["role"], "last": user.get("prev")}
     return out
 
 
@@ -230,6 +238,8 @@ def apply_result(cmd, ok, out):
     if not v:
         return
     v["step"] = ""
+    if cmd["op"] in ("create", "reinstall"):
+        notify(v["user"], "VPS " + ("ready" if ok else "failed"), "%s: %s" % (v["name"], "your VPS is running." if ok else out[:120]))
     op = cmd["op"]
     if op in ("create", "start", "restart", "reinstall"):
         v["st"] = "running" if ok else "error"
@@ -320,6 +330,7 @@ def register(d):
     u = {"id": state["nid"], "name": name, "username": name, "email": email, "role": "user", "pw": hash_pw(pw)}
     state["nid"] += 1
     state["users"].append(u)
+    notify(u["id"], "Welcome!", "Welcome to the panel! Your account has been created.")
     save_state()
     return u
 
@@ -420,6 +431,11 @@ class H(BaseHTTPRequestHandler):
                     if not user:
                         time.sleep(0.6)
                         return self.send_json(401, {"error": "wrong username or password"})
+                with lock:
+                    user["prev"] = user.get("last")
+                    user["last"] = time.time()
+                    notify(user["id"], "New Login", "New login from " + (self.headers.get("X-Real-IP") or self.client_address[0]))
+                    save_state()
                 s = secrets.token_hex(24)
                 sessions[s] = (user["id"], time.time() + SESSION_SECS)
                 return self.send_json(
@@ -472,6 +488,16 @@ class H(BaseHTTPRequestHandler):
                     save_state()
                 return self.send_json(200, {"ok": True})
 
+            if path == "/api/notifs/read":
+                user = self.authed()
+                if not user:
+                    return self.send_json(401, {"error": "login required"})
+                with lock:
+                    for n in state["notifs"]:
+                        if n["user"] == user["id"]:
+                            n["read"] = True
+                    save_state()
+                return self.send_json(200, {"ok": True})
             if path == "/api/vps" or path.startswith("/api/vps/"):
                 user = self.authed()
                 if not user:
@@ -549,6 +575,9 @@ class H(BaseHTTPRequestHandler):
                 for u in users:
                     o = old_users.get(u.get("id"))
                     pw = u.pop("pw", None)
+                    for k in ("last", "prev"):
+                        if o and k in o:
+                            u[k] = o[k]
                     if pw:
                         u["pw"] = hash_pw(str(pw))
                     elif o and o.get("pw"):
