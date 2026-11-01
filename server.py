@@ -602,12 +602,14 @@ class H(BaseHTTPRequestHandler):
                             v.pop(k, None)
                     v["node"] = o["node"]
                     new_vps.append(v)
-                seen = set()
+                names, mails = set(), set()
                 for u in users:
-                    for key in (str(u.get("username") or u.get("name", "")).lower(), str(u.get("email", "")).lower()):
-                        if key in seen:
-                            raise ValueError("duplicate username or email")
-                        seen.add(key)
+                    nm = str(u.get("username") or u.get("name", "")).lower()
+                    em = str(u.get("email", "")).lower()
+                    if nm in names or em in mails:
+                        raise ValueError("Username or email is used by another user")
+                    names.add(nm)
+                    mails.add(em)
                 old_users = {u["id"]: u for u in state["users"]}
                 for u in users:
                     o = old_users.get(u.get("id"))
@@ -626,6 +628,8 @@ class H(BaseHTTPRequestHandler):
                 state["rev"] += 1
                 save_state()
             return self.send_json(200, {"ok": True, "rev": state["rev"]})
+        except ValueError as e:
+            return self.send_json(400, {"error": str(e) or "bad request"})
         except Exception:
             return self.send_json(400, {"error": "bad request"})
 
