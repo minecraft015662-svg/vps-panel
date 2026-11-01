@@ -30,7 +30,7 @@ CMD_TIMEOUT = 1800
 BUSY = {"installing", "starting", "stopping", "restarting", "reinstalling", "restoring"}
 # fields the browser may never overwrite (the server is the only writer)
 SERVER_OWNED = ("st", "ssh", "err", "cname", "sshwait", "step", "cpu_pct", "mem_mb", "disk_mb",
-                "cpus", "mem", "disk", "plan", "os", "bk_limit", "port_limit", "ports", "bk", "sd")
+                "cpus", "mem", "disk", "plan", "os", "bk_limit", "port_limit", "ports", "bk", "sd", "cpu_name")
 
 OS_LABELS = {"ubuntu20": "Ubuntu 20.04 LTS", "ubuntu22": "Ubuntu 22.04 LTS", "ubuntu24": "Ubuntu 24.04 LTS",
              "debian11": "Debian 11", "debian12": "Debian 12", "debian13": "Debian 13",
@@ -40,6 +40,11 @@ DEF_OS, DEF_BK, DEF_PORTS = "ubuntu22", 2, 5   # defaults: OS, backups allowed, 
 lock = threading.Lock()
 sessions = {}  # sid -> (user id, expiry)
 results = {}   # file-manager command id -> (time, ok, output)
+
+
+def clean_cpu(raw):
+    """CPU name shown in neofetch: letters, digits and a few safe symbols only (it goes into a shell file)."""
+    return re.sub(r"[^A-Za-z0-9 ._@()/+,-]", "", str(raw or "")).strip()[:60]
 
 
 def plan_str(v):
@@ -53,6 +58,7 @@ def norm_vps(v):
     v.setdefault("bk_limit", DEF_BK)
     v.setdefault("port_limit", DEF_PORTS)
     v.setdefault("sd", 0)   # 1 = the VPS runs systemd (created by agent v5 or newer)
+    v.setdefault("cpu_name", "")   # CPU model text shown by neofetch inside the VPS
     if not isinstance(v.get("ports"), list):
         v["ports"] = []
     if not isinstance(v.get("bk"), list):
@@ -207,7 +213,7 @@ def enqueue(node_id, op, vps, args):
 def run_args(v):
     return {"cname": v["cname"], "name": v["name"], "cpus": v["cpus"], "mem": v["mem"], "disk": v["disk"],
             "panel": v.get("panel", "Nova Cloud"), "host": v.get("host", "nova"),
-            "os": v.get("os", DEF_OS)}
+            "os": v.get("os", DEF_OS), "cpu_name": v.get("cpu_name", "")}
 
 
 def clean_info(d):
@@ -241,13 +247,14 @@ def create_vps(d):
         raise ValueError("Unknown operating system")
     bk_limit = num(d, "bk_limit", 0, 50, DEF_BK)
     port_limit = num(d, "port_limit", 0, 100, DEF_PORTS)
+    cpu_name = clean_cpu(d.get("cpu_name"))
     vid = state["nid"]
     state["nid"] += 1
     v = {"id": vid, "name": name, "panel": panel, "host": host, "user": owner["id"] if owner else 1, "node": node["id"],
          "type": "docker", "cpus": cpus, "mem": mem, "disk": disk,
          "plan": "%d vCPU, %d GB RAM, %d GB disk" % (cpus, mem, disk),
          "st": "installing", "cname": "nova-%d" % vid, "err": "", "ssh": "",
-         "os": os_key, "bk_limit": bk_limit, "port_limit": port_limit, "ports": [], "bk": []}
+         "os": os_key, "bk_limit": bk_limit, "port_limit": port_limit, "ports": [], "bk": [], "cpu_name": cpu_name}
     state["vps"].append(v)
     enqueue(node["id"], "create", v, run_args(v))
     save_state()
@@ -350,7 +357,7 @@ def apply_result(cmd, ok, out):
                 notify(v["user"], "Backup failed", "%s: %s" % (v["name"], out[:120]))
     elif op == "resize" and not ok:
         for k, val in (cmd["args"].get("old") or {}).items():
-            if k in ("cpus", "mem", "disk"):
+            if k in ("cpus", "mem", "disk", "cpu_name"):
                 v[k] = val
         v["plan"] = plan_str(v)
         v["err"] = out[:300]
@@ -486,16 +493,18 @@ def vps_extra(vid, op, d, user):
             raise ValueError("This VPS already has %d backups. Delete some first" % len(v["bk"]))
         if port_limit < len(v["ports"]):
             raise ValueError("This VPS already has %d open ports. Close some first" % len(v["ports"]))
+        cpu_name = clean_cpu(d["cpu_name"]) if "cpu_name" in d else v.get("cpu_name", "")
         os_changed = os_key != v["os"]
         res_changed = (cpus, mem, disk) != (v["cpus"], v["mem"], v["disk"])
-        if os_changed or res_changed:
+        cn_changed = cpu_name != v.get("cpu_name", "")
+        if os_changed or res_changed or cn_changed:
             if not node or not online(node):
                 raise ValueError("The node of this VPS must be online to change its OS or resources")
             if v["st"] in BUSY:
                 raise ValueError("VPS is busy (%s). Wait for it to finish" % v["st"])
-        old = {"cpus": v["cpus"], "mem": v["mem"], "disk": v["disk"]}
+        old = {"cpus": v["cpus"], "mem": v["mem"], "disk": v["disk"], "cpu_name": v.get("cpu_name", "")}
         v.update(name=name, user=owner["id"], cpus=cpus, mem=mem, disk=disk,
-                 bk_limit=bk_limit, port_limit=port_limit)
+                 bk_limit=bk_limit, port_limit=port_limit, cpu_name=cpu_name)
         v["plan"] = plan_str(v)
         if os_changed:
             v["os"] = os_key
@@ -504,8 +513,9 @@ def vps_extra(vid, op, d, user):
             v["ssh"] = ""
             v["sshwait"] = False
             enqueue(node["id"], "reinstall", v, run_args(v))
-        elif res_changed:
-            enqueue(node["id"], "resize", v, {"cname": v["cname"], "cpus": cpus, "mem": mem, "disk": disk, "old": old})
+        elif res_changed or cn_changed:
+            enqueue(node["id"], "resize", v, {"cname": v["cname"], "cpus": cpus, "mem": mem, "disk": disk,
+                                              "cpu_name": cpu_name, "old": old})
         save_state()
         return v
 
@@ -612,7 +622,8 @@ def register(d):
         raise ValueError("This email is already registered")
     if any(str(u.get("username") or u.get("name", "")).lower() == name.lower() for u in state["users"]) or name.lower() == ADMIN_USER.lower():
         raise ValueError("This username is already taken")
-    u = {"id": state["nid"], "name": name, "username": name, "email": email, "role": "user", "pw": hash_pw(pw)}
+    u = {"id": state["nid"], "name": name, "username": name, "email": email, "role": "user", "pw": hash_pw(pw),
+         "created": int(time.time())}
     state["nid"] += 1
     state["users"].append(u)
     state["rev"] += 1

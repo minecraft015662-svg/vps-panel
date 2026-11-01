@@ -8,7 +8,7 @@ reinstall, delete, sshx). It updates itself when the panel has a newer agent.
 VPS are Docker containers that run systemd as PID 1 (privileged, own /var/lib/docker),
 so a full Pterodactyl Panel and Wings can be installed inside them.
 """
-AGENT_VERSION = 5
+AGENT_VERSION = 6
 
 import base64
 import json
@@ -124,6 +124,9 @@ nova_mem() {
     echo "${u}MiB / ${NOVA_MEM}MiB"
 }
 nova_disk() { echo "$(du -sxm / 2>/dev/null | cut -f1)MiB / ${NOVA_DISK}GB"; }
+nova_cpu() {
+    if [ -n "$NOVA_CPU_NAME" ]; then echo "${NOVA_CPU_NAME} (${NOVA_CPUS})"; else echo "${NOVA_CPUS} vCPU"; fi
+}
 print_info() {
     info title
     info underline
@@ -133,7 +136,7 @@ print_info() {
     prin "Uptime" "$(nova_uptime)"
     info "Packages" packages
     info "Shell" shell
-    prin "CPU" "${NOVA_CPUS} vCPU"
+    prin "CPU" "$(nova_cpu)"
     prin "Memory" "$(nova_mem)"
     prin "Disk" "$(nova_disk)"
     info cols
@@ -182,11 +185,16 @@ def stats_loop():
         time.sleep(1.5)
 
 
+def clean_cpu(raw):
+    return re.sub(r"[^A-Za-z0-9 ._@()/+,-]", "", str(raw or "")).strip()[:60]
+
+
 def put_file(c, path, text):
-    run(["docker", "exec", c, "mkdir", "-p", posixpath.dirname(path)], 20)
+    run(["docker", "exec", c, "mkdir", "-p", posixpath.dirname(path)], 20)   # fails on a stopped VPS, docker cp below still works
     with tempfile.NamedTemporaryFile("w", delete=False) as t:
         t.write(text)
         tmp = t.name
+    os.chmod(tmp, 0o644)
     try:
         return run(["docker", "cp", tmp, c + ":" + path], 30)
     finally:
@@ -280,8 +288,8 @@ def op_create(a):
         run(["docker", "exec", c, "bash", "-c", "DEBIAN_FRONTEND=noninteractive apt-get update -y"], 600)
         step(a, "Applying panel settings")
         run(["docker", "exec", c, "bash", "-c", "DEBIAN_FRONTEND=noninteractive apt-get install -y neofetch"], 600)
-    env = "NOVA_PANEL='%s'\nNOVA_NAME='%s'\nNOVA_CPUS=%d\nNOVA_MEM=%d\nNOVA_DISK=%d\n" % (
-        panel, host, int(float(a["cpus"])), int(a["mem"]) * 1024, int(a.get("disk") or 40))
+    env = "NOVA_PANEL='%s'\nNOVA_NAME='%s'\nNOVA_CPUS=%d\nNOVA_MEM=%d\nNOVA_DISK=%d\nNOVA_CPU_NAME='%s'\n" % (
+        panel, host, int(float(a["cpus"])), int(a["mem"]) * 1024, int(a.get("disk") or 40), clean_cpu(a.get("cpu_name")))
     put_file(c, "/etc/nova-vps.env", env)
     put_file(c, "/root/.config/neofetch/config.conf", NEOCONF)
     return True, "created"
@@ -327,18 +335,37 @@ def fs_mkdir(a):
     return _ok(run(["docker", "exec", a["cname"], "mkdir", "-p", "--", a["path"]], 30))
 
 
+def read_file(c, path):
+    """Read a file of a VPS with docker cp (works for running and stopped containers)."""
+    with tempfile.TemporaryDirectory() as d:
+        rc, _ = run(["docker", "cp", c + ":" + path, d + "/f"], 30)
+        if rc:
+            return ""
+        with open(d + "/f", "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+
+def set_env(c, kv):
+    """Change / add NAME=value lines in /etc/nova-vps.env of a VPS."""
+    lines = [l for l in read_file(c, "/etc/nova-vps.env").splitlines() if l.split("=", 1)[0] not in kv]
+    lines += ["%s=%s" % (k, v) for k, v in kv.items()]
+    return put_file(c, "/etc/nova-vps.env", "\n".join(lines) + "\n")
+
+
 def op_resize(a):
-    """Change CPU / RAM of an existing container without touching its data."""
+    """Change CPU / RAM / CPU name of an existing container without touching its data."""
     c = a["cname"]
     cpus, mem, disk = int(float(a["cpus"])), int(a["mem"]), int(a["disk"])
     rc, out = run(["docker", "update", "--cpus", str(cpus), "--memory", "%dg" % mem,
                    "--memory-swap", "%dg" % (mem * 2), c], 120)
     if rc:
         return False, out[-300:]
-    # keep neofetch inside the VPS in sync (ignored when the VPS is stopped)
-    run(["docker", "exec", c, "sh", "-c",
-         "[ -f /etc/nova-vps.env ] && sed -i -e 's/^NOVA_CPUS=.*/NOVA_CPUS=%d/' -e 's/^NOVA_MEM=.*/NOVA_MEM=%d/' "
-         "-e 's/^NOVA_DISK=.*/NOVA_DISK=%d/' /etc/nova-vps.env; true" % (cpus, mem * 1024, disk)], 30)
+    # keep neofetch inside the VPS in sync (also works when the VPS is stopped)
+    kv = {"NOVA_CPUS": str(cpus), "NOVA_MEM": str(mem * 1024), "NOVA_DISK": str(disk)}
+    if a.get("cpu_name") is not None:
+        kv["NOVA_CPU_NAME"] = "'%s'" % clean_cpu(a.get("cpu_name"))
+    set_env(c, kv)
+    put_file(c, "/root/.config/neofetch/config.conf", NEOCONF)   # old VPS get the new CPU line too
     return True, "resized"
 
 

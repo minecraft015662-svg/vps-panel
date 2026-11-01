@@ -46,7 +46,8 @@ Login: `admin` / `admin`. Change it in `/etc/nova-cloud/panel.env`, then `system
 - Users, nodes and VPS are saved on the server (`/var/lib/nova-cloud/data.json`).
 - Nodes connect for real (agent heartbeat with token).
 - Docker VPS are real: create, Start, Stop, Restart, Reinstall, Delete, and an sshx terminal link. A new VPS is created and left running only after the node finishes installing it.
-- **Admin > Users > Edit**: change username, email, password and role of a user. Changing the password signs that user out.
+- **Admin > Users > Manage**: shows the user's details (ID, email, role, created, last login, VPS, resources, ports, backups) and their VPS. From the same page you can change the password (type one or press Generate), username, email and role. Changing the password signs that user out.
+- **CPU name**: Admin > VPS > Create New (and Edit / Manage > Settings) has a `CPU name` field. `neofetch` inside the VPS shows it as `CPU: <name> (<cores>)`, for example `AMD EPYC 7763 (4)`. Empty = `4 vCPU`. Changing it or the cores updates a running or stopped VPS without reinstalling (node agent v6).
 - **systemd VPS**: every new VPS runs systemd as PID 1 (privileged, with its own `/var/lib/docker` volume). `systemctl`, `apt`/`dnf`, Docker inside the VPS, and a full Pterodactyl Panel + Wings all work. VPS created before agent v5 have no systemd: use Reinstall once. The first VPS of each OS builds a cached systemd image on the node (1-3 minutes), the next ones are fast. Backups are `docker commit` images and do not include the inside-Docker data volume.
 - **Live usage**: the dashboard cards and the Manage page show real CPU and RAM of the container and refresh every 2 seconds.
 - **VPS settings (Admin > VPS > Edit, or Manage > Settings)**: name, owner, CPU cores, RAM, disk, operating system (Ubuntu 20.04/22.04/24.04, Debian 11/12/13, Rocky Linux 9, AlmaLinux 9), backups allowed and ports allowed. CPU and RAM are applied to the running VPS without data loss. Changing the OS reinstalls the VPS.
@@ -57,4 +58,4 @@ Login: `admin` / `admin`. Change it in `/etc/nova-cloud/panel.env`, then `system
 
 ## Updating
 
-Upload all 5 files to your GitHub repo, then on the panel server run `sudo nova` and choose 4 (Update panel). Nodes download the new agent by themselves within a few seconds (agent version 5).
+Upload all 5 files to your GitHub repo, then on the panel server run `sudo nova` and choose 4 (Update panel). Nodes download the new agent by themselves within a few seconds (agent version 6).
