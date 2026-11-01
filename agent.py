@@ -5,7 +5,7 @@ Every few seconds it tells the panel it is alive, reports its Docker VPS,
 and runs the commands the panel queued (create, start, stop, restart,
 reinstall, delete, sshx). It updates itself when the panel has a newer agent.
 """
-AGENT_VERSION = 2
+AGENT_VERSION = 3
 
 import base64
 import json
@@ -98,8 +98,96 @@ def step(a, msg):
         pass
 
 
+NEOCONF = """[ -r /etc/nova-vps.env ] && . /etc/nova-vps.env
+nova_uptime() {
+    local s d h m
+    s=$(ps -o etimes= -p 1 2>/dev/null | tr -d ' ')
+    [ -n "$s" ] || { echo "unknown"; return; }
+    d=$((s / 86400)); h=$((s % 86400 / 3600)); m=$((s % 3600 / 60))
+    [ "$d" -gt 0 ] && printf '%s days, ' "$d"
+    printf '%s hours, %s mins' "$h" "$m"
+}
+nova_mem() {
+    local u
+    if [ -r /sys/fs/cgroup/memory.current ]; then u=$(( $(cat /sys/fs/cgroup/memory.current) / 1048576 ))
+    elif [ -r /sys/fs/cgroup/memory/memory.usage_in_bytes ]; then u=$(( $(cat /sys/fs/cgroup/memory/memory.usage_in_bytes) / 1048576 ))
+    else u=0; fi
+    echo "${u}MiB / ${NOVA_MEM}MiB"
+}
+nova_disk() { echo "$(du -sxm / 2>/dev/null | cut -f1)MiB / ${NOVA_DISK}GB"; }
+print_info() {
+    info title
+    info underline
+    info "OS" distro
+    prin "Host" "${NOVA_PANEL} Docker VPS"
+    info "Kernel" kernel
+    prin "Uptime" "$(nova_uptime)"
+    info "Packages" packages
+    info "Shell" shell
+    prin "CPU" "${NOVA_CPUS} vCPU"
+    prin "Memory" "$(nova_mem)"
+    prin "Disk" "$(nova_disk)"
+    info cols
+}
+"""
+
+
+STATS = {}
+DISK = {}
+
+
+def _mb(s):
+    m = re.match(r"\s*([\d.]+)\s*([A-Za-z]+)", s or "")
+    if not m:
+        return 0.0
+    f = {"b": 1 / 1048576, "kb": 1 / 1024, "kib": 1 / 1024, "mb": 1, "mib": 1, "gb": 1024, "gib": 1024, "tb": 1048576, "tib": 1048576}
+    return float(m.group(1)) * f.get(m.group(2).lower(), 0)
+
+
+def stats_loop():
+    n = 0
+    while True:
+        try:
+            rc, out = run(["docker", "stats", "--no-stream", "--format", "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}"], 40)
+            cur = {}
+            if rc == 0:
+                for line in out.splitlines():
+                    p = line.split("|")
+                    if len(p) == 3 and p[0].startswith("nova-"):
+                        cur[p[0]] = {"cpu": round(float(p[1].strip().strip("%") or 0), 1), "mem": round(_mb(p[2].split("/")[0]))}
+            if n % 12 == 0:
+                rc2, out2 = run(["docker", "ps", "-s", "--filter", "name=^nova-", "--format", "{{.Names}}|{{.Size}}"], 90)
+                if rc2 == 0:
+                    for line in out2.splitlines():
+                        p = line.split("|", 1)
+                        if len(p) == 2 and p[1].split():
+                            m = re.search(r"virtual ([\d.]+\s*[A-Za-z]+)", p[1])
+                            DISK[p[0]] = round(_mb(m.group(1) if m else p[1].split()[0]))
+            for k, v in cur.items():
+                v["disk"] = DISK.get(k, 0)
+            STATS.clear()
+            STATS.update(cur)
+        except Exception:
+            pass
+        n += 1
+        time.sleep(3)
+
+
+def put_file(c, path, text):
+    run(["docker", "exec", c, "mkdir", "-p", posixpath.dirname(path)], 20)
+    with tempfile.NamedTemporaryFile("w", delete=False) as t:
+        t.write(text)
+        tmp = t.name
+    try:
+        return run(["docker", "cp", tmp, c + ":" + path], 30)
+    finally:
+        os.unlink(tmp)
+
+
 def op_create(a):
     c = a["cname"]
+    panel = re.sub(r"[^A-Za-z0-9 ._-]", "", str(a.get("panel") or "Nova Cloud")).strip()[:30] or "Nova Cloud"
+    host = re.sub(r"[^a-z0-9-]", "", str(a.get("host") or "nova").lower())[:30] or "nova"
     step(a, "Removing old container")
     run(["docker", "rm", "-f", c], 60)
     step(a, "Downloading the OS image")
@@ -107,7 +195,7 @@ def op_create(a):
     if rc:
         return False, "Image download failed: " + out[-250:]
     step(a, "Creating the container")
-    rc, out = run(["docker", "run", "-d", "--name", c, "--hostname", a.get("name", c),
+    rc, out = run(["docker", "run", "-d", "--name", c, "--hostname", host,
                    "--cpus", str(a["cpus"]), "--memory", str(a["mem"]) + "g",
                    "--restart", "unless-stopped", "--init", IMAGE, "sleep", "infinity"], 1500)
     if rc:
@@ -117,6 +205,12 @@ def op_create(a):
                    "apt-get update -y && DEBIAN_FRONTEND=noninteractive apt-get install -y curl wget nano sudo ca-certificates procps"], 1500)
     if rc:
         return False, "Container created but package install failed: " + out[-250:]
+    step(a, "Applying panel settings")
+    run(["docker", "exec", c, "bash", "-c", "DEBIAN_FRONTEND=noninteractive apt-get install -y neofetch"], 600)
+    env = "NOVA_PANEL='%s'\nNOVA_NAME='%s'\nNOVA_CPUS=%d\nNOVA_MEM=%d\nNOVA_DISK=%d\n" % (
+        panel, host, int(float(a["cpus"])), int(a["mem"]) * 1024, int(a.get("disk") or 40))
+    put_file(c, "/etc/nova-vps.env", env)
+    put_file(c, "/root/.config/neofetch/config.conf", NEOCONF)
     return True, "created"
 
 
@@ -240,10 +334,12 @@ def self_update():
 
 
 def main():
+    threading.Thread(target=stats_loop, daemon=True).start()
     while True:
         try:
             payload = info()
             payload["containers"] = containers()
+            payload["stats"] = dict(STATS)
             resp = json.loads(api("/api/agent/heartbeat", payload))
             v = resp.get("agent_version")
             if v and v != AGENT_VERSION:

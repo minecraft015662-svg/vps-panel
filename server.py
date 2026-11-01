@@ -28,7 +28,7 @@ SESSION_SECS = 7 * 24 * 3600
 CMD_TIMEOUT = 1800
 
 BUSY = {"installing", "starting", "stopping", "restarting", "reinstalling"}
-SERVER_OWNED = ("st", "ssh", "err", "cname", "sshwait", "step")
+SERVER_OWNED = ("st", "ssh", "err", "cname", "sshwait", "step", "cpu_pct", "mem_mb", "disk_mb")
 
 lock = threading.Lock()
 sessions = {}  # sid -> (user id, expiry)
@@ -166,7 +166,8 @@ def enqueue(node_id, op, vps, args):
 
 
 def run_args(v):
-    return {"cname": v["cname"], "name": v["name"], "cpus": v["cpus"], "mem": v["mem"]}
+    return {"cname": v["cname"], "name": v["name"], "cpus": v["cpus"], "mem": v["mem"], "disk": v["disk"],
+            "panel": v.get("panel", "Nova Cloud"), "host": v.get("host", "nova")}
 
 
 def clean_info(d):
@@ -193,9 +194,11 @@ def create_vps(d):
     cpus = max(1, min(64, int(d.get("cpus") or 2)))
     mem = max(1, min(1024, int(d.get("mem") or 4)))
     disk = max(1, min(100000, int(d.get("disk") or 40)))
+    panel = re.sub(r"[^A-Za-z0-9 ._-]", "", str(d.get("panel") or "Nova Cloud")).strip()[:30] or "Nova Cloud"
+    host = re.sub(r"[^a-z0-9]", "", panel.lower())[:20] or "nova"
     vid = state["nid"]
     state["nid"] += 1
-    v = {"id": vid, "name": name, "user": owner["id"] if owner else 1, "node": node["id"],
+    v = {"id": vid, "name": name, "panel": panel, "host": host, "user": owner["id"] if owner else 1, "node": node["id"],
          "type": "docker", "cpus": cpus, "mem": mem, "disk": disk,
          "plan": "%d vCPU, %d GB RAM, %d GB disk" % (cpus, mem, disk),
          "st": "installing", "cname": "nova-%d" % vid, "err": "", "ssh": ""}
@@ -287,7 +290,7 @@ def apply_result(cmd, ok, out):
         v["ssh"] = ""
 
 
-def sweep_and_sync(node, containers):
+def sweep_and_sync(node, containers, stats=None):
     now = time.time()
     for c in state["cmds"]:
         if c["status"] == "sent" and now - c.get("sent", now) > CMD_TIMEOUT:
@@ -301,6 +304,21 @@ def sweep_and_sync(node, containers):
                 v["st"] = "running" if s == "running" else "stopped"
                 if s != "running":
                     v["ssh"] = ""
+    if isinstance(stats, dict):
+        for v in state["vps"]:
+            if v["node"] != node["id"]:
+                continue
+            st = stats.get(v.get("cname"))
+            if v["st"] == "running" and isinstance(st, dict):
+                try:
+                    v["cpu_pct"] = float(st.get("cpu", 0))
+                    v["mem_mb"] = int(st.get("mem", 0))
+                    v["disk_mb"] = int(st.get("disk", 0))
+                except (TypeError, ValueError):
+                    pass
+            else:
+                v.pop("cpu_pct", None)
+                v.pop("mem_mb", None)
 
 
 FS_ACTS = ("ls", "get", "write", "rm", "mkdir")
@@ -489,7 +507,7 @@ class H(BaseHTTPRequestHandler):
                         return self.send_json(401, {"error": "unknown node token"})
                     node["seen"] = time.time()
                     node["info"] = clean_info(d)
-                    sweep_and_sync(node, d.get("containers"))
+                    sweep_and_sync(node, d.get("containers"), d.get("stats"))
                     cmds = []
                     for c in state["cmds"]:
                         if c["node"] == node["id"] and c["status"] == "pending":
