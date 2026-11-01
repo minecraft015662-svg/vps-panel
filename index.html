@@ -91,6 +91,14 @@ h2{margin:0 0 10px;font-size:18px;letter-spacing:-.01em}
 .sc{background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--ac);border-radius:16px;padding:16px;display:grid;gap:6px;justify-items:start}
 .sc b{font-size:34px;line-height:1}.sc b small{font-size:14px}
 @media(max-width:900px){.wrap{grid-template-columns:1fr}#sb{position:static;height:auto;flex-direction:row;align-items:center;flex-wrap:wrap;border-right:0;border-bottom:1px solid var(--bd)}#nav{flex-direction:row;overflow-x:auto}.st4{grid-template-columns:1fr 1fr}.mc{padding:12px}}
+
+.sl{color:var(--mut);letter-spacing:.1em;font-size:11px;padding:14px 12px 4px}
+.empty{text-align:center;padding:50px 20px;border-style:dashed}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+.rings{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;text-align:center}
+.rg{background:var(--bd);border-radius:14px;padding:14px 6px;display:grid;gap:4px}
+.rg i{display:block;width:84px;height:84px;border-radius:50%;margin:0 auto 6px;background:conic-gradient(var(--ac) calc(var(--p)*1%),var(--bd) 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 9px),#000 calc(100% - 8px));mask:radial-gradient(farthest-side,transparent calc(100% - 9px),#000 calc(100% - 8px))}
+@media(max-width:900px){.two{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -164,16 +172,22 @@ return '<h2>File manager</h2><div class="row"><b style="word-break:break-all;fle
 const err=x=>toast(String(x));
 function home(){const q=S.vps,sum=k=>q.reduce((a,x)=>a+(+x[k]||0),0),g=new Date().getHours(),hi=g<12?'GOOD MORNING':g<17?'GOOD AFTERNOON':'GOOD EVENING',run=q.filter(x=>x.st=='running').length;
 const c=(t,v,u,sb,col)=>'<div class="sc" style="border-left-color:'+col+'"><small>'+t+'</small><b>'+v+' <small>'+u+'</small></b><span class="pill">'+sb+'</span></div>';
-return '<div class="hero"><small>'+hi+'</small><h1>'+e(S.me.name)+'</h1><span class="pill">'+(q.length?run+' of '+q.length+' running':'No servers yet')+'</span><button data-a="tab" data-v="dash">Manage VPS</button></div><div class="st4">'+c('TOTAL VPS',q.length,'',run+' running','#3b6cf4')+c('CPU ALLOCATED',sum('cpus'),'vCPU','Across '+q.length+' VPS','#22c55e')+c('RAM ALLOCATED',sum('mem'),'GB','Reserved','#3b82f6')+c('DISK ALLOCATED',sum('disk'),'GB','Provisioned','#f59e0b')+'</div>'+(q.length?'<h2 style="margin-top:18px">My Servers</h2><div class="grid">'+q.map(vcard).join('')+'</div>':'<div class="card" style="text-align:center;margin-top:18px"><h2>No servers yet</h2><p class="mut">You have not created any virtual private servers.'+(S.me.role=='admin'?'':' Contact an administrator to provision a VPS for you.')+'</p></div>')}
-function tabs(){$('#nav').innerHTML=!S.auth?'':[['home','Dashboard'],['dash','My VPS'],['admin','Admin panel'],['edit','Editor']].filter(x=>S.me.role=='admin'||x[0]=='home'||x[0]=='dash').map(([k,l])=>'<button data-a="tab" data-v="'+k+'" class="'+(S.tab==k?'on':'')+'">'+l+'</button>').join('')}
+const rg=(t,key,u)=>{const tot=sum(key),r=q.filter(x=>x.st=='running').reduce((a,x)=>a+(+x[key]||0),0),p=tot?Math.round(r*100/tot):0;return '<div class="rg"><i style="--p:'+p+'"></i><small>'+t+'</small><b>'+tot+' '+u+'</b><small>'+(q.length?'across '+q.length+' VPS':'')+'</small></div>'};
+return '<div class="hero"><small>'+hi+'</small><h1>'+e(S.me.name)+'</h1><span class="pill">'+(q.length?run+' of '+q.length+' running':'No servers yet')+'</span><button data-a="tab" data-v="dash">Manage VPS</button></div><div class="st4">'+c('TOTAL VPS',q.length,'',run+' running','#3b6cf4')+c('CPU ALLOCATED',sum('cpus'),'vCPU','Across '+q.length+' VPS','#22c55e')+c('RAM ALLOCATED',sum('mem'),'GB','Reserved','#3b82f6')+c('DISK ALLOCATED',sum('disk'),'GB','Provisioned','#f59e0b')+'</div>'
++'<div class="two"><div class="card"><h2>VPS Status</h2>'+(q.length?q.map(x=>'<div class="row" style="justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--bd)"><span>'+e(x.name)+'</span><span class="pill '+x.st+'">'+x.st+'</span></div>').join(''):'<p class="mut" style="text-align:center;padding:36px 0">No VPS to display yet.</p>')+'</div><div class="card"><h2>Resource Allocation</h2><div class="rings">'+rg('CPU','cpus','vCPU')+rg('MEMORY','mem','GB')+rg('STORAGE','disk','GB')+'</div></div></div>'}
+function tabs(){$('#nav').innerHTML=!S.auth?'':[['home','Dashboard'],['dash','My VPS'],['profile','Profile'],['admin','Admin panel'],['edit','Editor']].filter(x=>S.me.role=='admin'||x[0]=='home'||x[0]=='dash'||x[0]=='profile').map(([k,l])=>(k=='home'?'<small class="sl">MAIN</small>':k=='profile'?'<small class="sl">MANAGEMENT</small>':'')+'<button data-a="tab" data-v="'+k+'" class="'+(S.tab==k?'on':'')+'">'+l+'</button>').join('')}
 function vcard(v){const run=v.st=='running';return '<div class="card"><div class="top"><b>'+e(v.name)+'</b><span class="pill '+v.st+'">'+v.st+'</span></div><small>'+(v.type=='kvm'?'KVM':'Docker')+', '+e(v.plan)+', node: '+e(nodeName(v.node))+'</small><br><small>Owner: '+e(userName(v.user))+'</small>'
 +'<div class="bar"><i style="width:'+(run?(v.cpu||0):0)+'%"></i></div><small>CPU '+(run?(v.cpu||0):0)+'%</small>'
 +'<div class="bar"><i style="width:'+(run?(v.ram||0):0)+'%"></i></div><small>RAM '+(run?(v.ram||0):0)+'%</small>'
 +'<div class="acts"><button class="pri" data-a="manage" data-v="'+v.id+'">Manage</button><button data-a="tog" data-v="'+v.id+'">'+(run?'Stop':'Start')+'</button><button data-a="rst" data-v="'+v.id+'">Restart</button>'+(S.me.role=='admin'?'<button class="dng" data-a="delvps" data-v="'+v.id+'">Delete</button>':'')+'</div></div>'}
-function dash(){const on=S.nodes.filter(n=>n.status=='online');
-return '<div class="stats"><div class="card"><b>'+S.vps.length+'</b><small>Total VPS</small></div><div class="card"><b>'+S.vps.filter(v=>v.st=='running').length+'</b><small>Running</small></div><div class="card"><b>'+on.length+'</b><small>Nodes online</small></div></div>'
+function vlist(){const q=(S.q||'').toLowerCase(),f=S.sf||'',L=S.vps.filter(v=>(!f||v.st==f)&&(!q||(v.name+' '+v.id).toLowerCase().includes(q)));
+return '<div class="mut" style="margin:6px 0 12px">Showing <b>'+L.length+'</b> of <b>'+S.vps.length+'</b> VPS</div><div class="grid">'+(L.map(vcard).join('')||'<div class="card empty"><h2>No Virtual Private Servers</h2><p class="mut">'+(S.me.role=='admin'?'Create your first VPS above.':'Contact an administrator to create a VPS for you.')+'</p></div>')+'</div>'}
+function dash(){const on=S.nodes.filter(n=>n.status=='online'),V=S.vps,n=s=>V.filter(x=>x.st==s).length;
+const k=(v,l,c)=>'<div class="card" style="border-top:3px solid '+c+'"><b style="font-size:30px">'+v+'</b><br><small>'+l+'</small></div>';
+return '<div class="st4">'+k(V.length,'TOTAL VPS','#6366f1')+k(n('running'),'RUNNING','#22c55e')+k(n('stopped'),'STOPPED','#9ca3af')+k(n('error'),'ERROR','#ec4899')+'</div><div style="height:12px"></div>'
 +(S.me.role!='admin'?'':'<div class="card row"><input id="nv" placeholder="VPS name"><select id="nvn">'+on.map(n=>'<option value="'+n.id+'">'+e(n.name)+'</option>').join('')+'</select><select id="nvt"><option value="docker">Docker VPS</option></select><input id="nvc" type="number" min="1" max="32" placeholder="vCPU (2)"><input id="nvm" type="number" min="1" placeholder="RAM in GB (4)"><input id="nvd" type="number" min="1" placeholder="Disk in GB (40)"><button class="pri" data-a="mkvps">Create VPS</button></div>')
-+'<div class="grid">'+(S.vps.map(vcard).join('')||'<p class="card mut">No VPS yet.'+(S.me.role=='admin'?' Create your first one above.':' Contact an administrator to provision a VPS for you.')+'</p>')+'</div>'}
++'<div class="card row" style="margin:12px 0"><input id="vq" placeholder="Search by name or ID..." value="'+e(S.q||'')+'"><select id="vf"><option value="">All Status</option>'+['running','stopped','error','installing'].map(s=>'<option'+(S.sf==s?' selected':'')+'>'+s+'</option>').join('')+'</select></div><div id="vl">'+vlist()+'</div>'}
+function profile(){return '<div class="card" style="max-width:520px"><h2>Profile</h2><table style="min-width:0"><tr><td>Name</td><td>'+e(S.me.name)+'</td></tr><tr><td>Email</td><td>'+e((S.users.find(u=>u.id==S.me.id)||{}).email||'')+'</td></tr><tr><td>Role</td><td>'+e(S.me.role)+'</td></tr></table><div class="acts"><button class="dng" data-a="logout">Log out</button></div></div>'}
 const lim=5,pu=u=>S.vps.filter(x=>x.user==u).reduce((a,x)=>a+(x.ports||[]).length,0);
 const bx=(t,b,c)=>'<div class="bx"><div class="bh"><b>'+t+'</b>'+(b||'')+'</div>'+c+'</div>';
 const ph=(t,s)=>'<div class="ph"><h2>'+t+'</h2><small>'+s+'</small></div>';
@@ -202,7 +216,7 @@ return '<div class="card"><h2>vPanel editor</h2><p class="mut">Changes apply to 
 +'<div class="fld"><label for="f-bl">Glass blur</label><input id="f-bl" type="range" min="0" max="20" value="'+b.blur+'"></div>'
 +'<h2 style="margin-top:22px">Login page</h2><div class="fld"><label for="f-llogo">Login logo</label><input id="f-llogo" type="file" accept="image/*"></div><div class="fld"><label for="f-lbg">Login background image or GIF</label><input id="f-lbg" type="file" accept="image/*"><small>Leave empty to use the main logo and background.</small></div>'
 +'<div class="acts"><button class="pri" data-a="logout">Preview login page</button><button data-a="rmbg">Remove background</button><button data-a="rmlogo">Remove logo</button><button data-a="rmlbg">Clear login images</button><button class="dng" data-a="reset">Reset all</button></div></div>'}
-function render(){if(S.auth&&S.me.role!='admin'&&S.tab!='home')S.tab='dash';persist();apply();$('#who').textContent=S.me.name||'';document.querySelector('header').style.display=S.auth?'':'none';$('#sb').style.display=S.auth?'':'none';$('.wrap').classList.toggle('out',!S.auth);$('#pt').textContent={home:'Dashboard',dash:'My VPS',admin:'Admin panel',edit:'Editor'}[S.tab]||'';tabs();$('#app').innerHTML=!S.auth?login():S.tab=='home'?home():S.tab=='dash'?(S.vm?mg():dash()):S.tab=='admin'?admin():edit()}
+function render(){if(S.auth&&S.me.role!='admin'&&!['home','profile'].includes(S.tab))S.tab='dash';persist();apply();$('#who').textContent=S.me.name||'';document.querySelector('header').style.display=S.auth?'':'none';$('#sb').style.display=S.auth?'':'none';$('.wrap').classList.toggle('out',!S.auth);$('#pt').textContent={home:'Dashboard',profile:'Profile',dash:'My Virtual Private Servers',admin:'Admin panel',edit:'Editor'}[S.tab]||'';tabs();$('#app').innerHTML=!S.auth?login():S.tab=='home'?home():S.tab=='profile'?profile():S.tab=='dash'?(S.vm?mg():dash()):S.tab=='admin'?admin():edit()}
 const A={
 tab(v){S.tab=v;S.vm=0},sub(v){S.sub=v},
 manage(v){S.vm=+v;S.mt='info';S.fp='/root';S.fe=null},back(){S.vm=0},mt(v){S.mt=v;const q=cur();if(v=='files'&&q.st=='running')fmload(S.fp);else if(v=='term'&&q.st=='running'&&!q.ssh&&!q.sshwait)vop(q.id,'sshx')},
@@ -243,12 +257,14 @@ reset(){S.brand=Object.assign({},DEF);save();apply()}
 };
 document.addEventListener('click',ev=>{const t=ev.target.closest('button[data-a]');if(!t)return;if(A[t.dataset.a](t.dataset.v)!==false)render()});
 document.addEventListener('change',ev=>{const t=ev.target;
+if(t.id=='vf'){S.sf=t.value;$('#vl').innerHTML=vlist();return}
 if(t.dataset.a=='own'){S.vps.find(q=>q.id==t.dataset.v).user=+t.value;toast('Owner changed');return}
 if(t.id=='ff'&&t.files[0]){const f=t.files[0];if(f.size>5242880)return toast('Max 5 MB');const r=new FileReader();r.onload=()=>{toast('Uploading...');fsx('write',jp(f.name),String(r.result).split(',')[1]).then(()=>{toast('Uploaded');fmload(S.fp)}).catch(err)};r.readAsDataURL(f);return}
 if(t.type=='file'&&t.files[0]){const k=({'f-logo':'logo','f-bg':'bg','f-llogo':'llogo','f-lbg':'lbg'})[t.id],f=t.files[0];
 if(f.size>6e6)return toast('File must be under 6 MB');
 const r=new FileReader();r.onload=()=>{S.brand[k]=r.result;save();apply();toast('Image applied')};r.readAsDataURL(f)}});
 document.addEventListener('input',ev=>{const t=ev.target,b=S.brand;
+if(t.id=='vq'){S.q=t.value;$('#vl').innerHTML=vlist();return}
 if(t.id=='f-name')b.name=t.value;else if(t.id=='f-ac')b.accent=t.value;else if(t.id=='f-ov')b.ov=+t.value;else if(t.id=='f-bl')b.blur=+t.value;else return;
 save();apply()});
 load().then(()=>{S.auth=true}).catch(()=>{}).finally(()=>{apply();render()});
