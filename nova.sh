@@ -18,6 +18,21 @@ banner() {
   echo -e "\e[0m"
 }
 
+free_port() {
+  systemctl stop nova-panel 2>/dev/null
+  local pids
+  pids=$(ss -ltnp 2>/dev/null | grep -E ':3000[[:space:]]' | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u)
+  [ -z "$pids" ] && return 0
+  for p in $pids; do
+    echo "Port 3000 is used by an OLD program: pid $p ($(ps -o args= -p "$p" | cut -c1-80))"
+  done
+  read -rp "Stop it so the new panel can start? (y/N): " a </dev/tty
+  if [[ $a =~ ^[Yy]$ ]]; then
+    for p in $pids; do kill "$p" 2>/dev/null; sleep 1; kill -9 "$p" 2>/dev/null; done
+    ss -ltn 2>/dev/null | grep -qE ':3000[[:space:]]' && echo "Port 3000 is STILL busy. If it is pm2, run: pm2 list  then  pm2 delete <old panel name>"
+  fi
+}
+
 find_panel() {
   SRV=$(find "$DIR" -name server.py -not -path '*/.git/*' | head -n1)
   [ -n "$SRV" ] || return 1
@@ -65,6 +80,7 @@ install_panel() {
   write_service
   systemctl daemon-reload
   systemctl enable nova-panel >/dev/null 2>&1
+  free_port
   systemctl restart nova-panel
   echo "[4/5] Nginx setup..."
   cat > /etc/nginx/sites-available/nova-cloud <<'EOF'
@@ -147,6 +163,7 @@ update_panel() {
   mkdir -p "$CONF" "$DATA"
   write_service
   systemctl enable nova-panel >/dev/null 2>&1
+  free_port
   systemctl restart nova-panel
   sleep 2
   code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/)
@@ -167,8 +184,9 @@ update_node() {
 }
 
 node_setup() {
-  read -rp "Panel URL (e.g. http://1.2.3.4): " URL </dev/tty
-  read -rp "Node token: " TOKEN </dev/tty
+  URL="${1:-}"; TOKEN="${2:-}"
+  [ -n "$URL" ] || read -rp "Panel URL (e.g. http://1.2.3.4): " URL </dev/tty
+  [ -n "$TOKEN" ] || read -rp "Node token: " TOKEN </dev/tty
   URL="${URL%/}"
   [ -n "$URL" ] && [ -n "$TOKEN" ] || { echo "Both URL and token are required."; return; }
   apt-get update -y && apt-get install -y curl python3 docker.io qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils lxcfs || { echo "Package installation failed"; return; }
@@ -192,6 +210,8 @@ node_setup() {
 }
 
 case "$1" in
+  panel) if [ -d "$DIR/.git" ]; then update_panel; else install_panel; fi; exit 0 ;;
+  node) node_setup "$2" "$3"; exit 0 ;;
   update) update_panel; exit 0 ;;
   node-update) update_node; exit 0 ;;
 esac

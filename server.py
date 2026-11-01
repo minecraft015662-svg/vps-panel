@@ -11,6 +11,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -55,18 +56,21 @@ def default_state():
         "cid": 1,
         "cmds": [],
         "notifs": [],
+        "rev": 0,
     }
 
 
 def load_state():
-    try:
-        with open(DATA, "r", encoding="utf-8") as f:
-            d = json.load(f)
-        for k, v in default_state().items():
-            d.setdefault(k, v)
-        return d
-    except Exception:
-        return default_state()
+    for p in (DATA, DATA + ".bak"):
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            for k, v in default_state().items():
+                d.setdefault(k, v)
+            return d
+        except Exception:
+            continue
+    return default_state()
 
 
 def save_state():
@@ -74,10 +78,38 @@ def save_state():
     tmp = DATA + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(dict(state, cmds=[c for c in state["cmds"] if not str(c["op"]).startswith("fs_")]), f)
+    if os.path.exists(DATA):
+        try:
+            shutil.copy2(DATA, DATA + ".bak")
+        except OSError:
+            pass
     os.replace(tmp, DATA)
 
 
 state = load_state()
+SESS = DATA + ".sessions"
+
+
+def load_sessions():
+    try:
+        with open(SESS, "r", encoding="utf-8") as f:
+            return {k: (v[0], v[1]) for k, v in json.load(f).items() if v[1] > time.time()}
+    except Exception:
+        return {}
+
+
+def save_sessions():
+    try:
+        tmp = SESS + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(sessions, f)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, SESS)
+    except OSError:
+        pass
+
+
+sessions.update(load_sessions())
 
 
 def agent_version():
@@ -330,6 +362,7 @@ def register(d):
     u = {"id": state["nid"], "name": name, "username": name, "email": email, "role": "user", "pw": hash_pw(pw)}
     state["nid"] += 1
     state["users"].append(u)
+    state["rev"] += 1
     notify(u["id"], "Welcome!", "Welcome to the panel! Your account has been created.")
     save_state()
     return u
@@ -438,12 +471,14 @@ class H(BaseHTTPRequestHandler):
                     save_state()
                 s = secrets.token_hex(24)
                 sessions[s] = (user["id"], time.time() + SESSION_SECS)
+                save_sessions()
                 return self.send_json(
                     200, {"ok": True},
                     {"Set-Cookie": "nova_sid=%s; HttpOnly; SameSite=Strict; Path=/; Max-Age=%d" % (s, SESSION_SECS)},
                 )
             if path == "/api/logout":
                 sessions.pop(self.sid(), None)
+                save_sessions()
                 return self.send_json(200, {"ok": True}, {"Set-Cookie": "nova_sid=; Path=/; Max-Age=0"})
 
             if path == "/api/agent/heartbeat":
@@ -541,6 +576,8 @@ class H(BaseHTTPRequestHandler):
             if not all(isinstance(x, list) for x in (users, nodes, vps)):
                 raise ValueError
             with lock:
+                if d.get("rev") != state["rev"]:
+                    return self.send_json(409, {"error": "stale"})
                 old_nodes = {n["id"]: n for n in state["nodes"]}
                 for n in nodes:
                     n.pop("status", None)
@@ -586,8 +623,9 @@ class H(BaseHTTPRequestHandler):
                     users.insert(0, old_users[1])
                 state["users"], state["nodes"], state["vps"] = users, nodes, new_vps
                 state["nid"] = max(state["nid"], int(d.get("nid", 0)))
+                state["rev"] += 1
                 save_state()
-            return self.send_json(200, {"ok": True})
+            return self.send_json(200, {"ok": True, "rev": state["rev"]})
         except Exception:
             return self.send_json(400, {"error": "bad request"})
 
