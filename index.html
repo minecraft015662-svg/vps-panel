@@ -129,6 +129,42 @@ h2{margin:0 0 10px;font-size:18px;letter-spacing:-.01em}
 .bar{height:8px;border-radius:99px;background:rgba(127,127,127,.25);overflow:hidden}.bar i{display:block;height:100%;border-radius:99px;transition:width .4s}
 .fgs{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}.fg{background:var(--bd);border-radius:12px;padding:10px 12px;display:grid;gap:2px}
 @media(max-width:900px){.mtrs,.fgs{grid-template-columns:1fr 1fr}}
+
+.vh2{position:relative;overflow:hidden;border-radius:20px;padding:18px 22px 22px;color:#fff;background:linear-gradient(135deg,var(--ac),#7c3aed 60%,#ec4899)}
+.vh2::before,.vh2::after{content:"";position:absolute;border-radius:50%;background:rgba(255,255,255,.12);pointer-events:none}
+.vh2::before{width:220px;height:220px;right:-60px;top:-90px}.vh2::after{width:140px;height:140px;right:130px;bottom:-80px}
+.vtop{display:flex;justify-content:space-between;align-items:center;gap:10px;position:relative;z-index:1}
+.vtop button{background:rgba(255,255,255,.18);border-color:transparent;color:#fff}
+.vh2 .pill{background:rgba(0,0,0,.28);display:inline-flex;align-items:center;gap:7px;color:#fff;border-color:rgba(255,255,255,.35)}
+.vid{display:flex;align-items:center;gap:16px;margin-top:16px;position:relative;z-index:1}
+.vid h1{margin:0;font-size:30px;word-break:break-all}
+.osb{width:60px;height:60px;border-radius:18px;display:grid;place-items:center;font-size:28px;font-weight:800;background:rgba(255,255,255,.2);flex:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.3)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.chips span{font-size:12px;padding:3px 10px;border-radius:999px;background:rgba(0,0,0,.25)}
+.dot{width:9px;height:9px;border-radius:50%;background:#9ca3af;display:inline-block}
+.running .dot{background:#4ade80;animation:pl 1.8s infinite}
+.error .dot,.offline .dot{background:#f87171}
+.installing .dot,.starting .dot,.stopping .dot,.restarting .dot,.reinstalling .dot,.restoring .dot{background:#fbbf24;animation:pl 1s infinite}
+@keyframes pl{0%{box-shadow:0 0 0 0 rgba(255,255,255,.55)}100%{box-shadow:0 0 0 9px rgba(255,255,255,0)}}
+.ab2{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.ab2 button{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border-radius:12px;font-weight:600;background:var(--card);backdrop-filter:blur(var(--bl));transition:transform .15s,box-shadow .15s}
+.ab2 button i{font-style:normal}
+.ab2 button:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,0,0,.25)}
+.ab2 .b-go{background:#16a34a;color:#fff;border-color:transparent}.ab2 .b-rs{border-color:var(--ac);color:var(--ac)}.ab2 .b-st{background:#dc2626;color:#fff;border-color:transparent}.ab2 .b-rl{color:var(--bad)}
+.stp{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding:10px 14px;border-radius:12px;background:var(--card);border:1px dashed var(--warn);color:var(--warn)}
+.spin{width:16px;height:16px;border-radius:50%;border:2px solid currentColor;border-top-color:transparent;animation:sp .8s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
+.sub button{border-radius:999px;padding:8px 16px;transition:transform .15s}.sub button:hover{transform:translateY(-1px)}
+.gauges{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px}
+.gg{display:flex;align-items:center;gap:14px;padding:14px;border-radius:16px;background:var(--bd)}
+.gr{position:relative;width:84px;height:84px;flex:none;display:grid;place-items:center}
+.gr i{position:absolute;inset:0;border-radius:50%;background:conic-gradient(var(--c) calc(var(--p)*1%),rgba(127,127,127,.25) 0);-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 9px),#000 calc(100% - 8px));mask:radial-gradient(farthest-side,transparent calc(100% - 9px),#000 calc(100% - 8px))}
+.gr b{font-size:16px}.gv{font-size:22px;font-weight:700;line-height:1.2}
+.term{border-radius:14px;overflow:hidden;background:#0b1020;color:#d1fae5;border:1px solid rgba(255,255,255,.12);box-shadow:0 10px 30px rgba(0,0,0,.3);margin-bottom:14px}
+.tbar{display:flex;align-items:center;gap:7px;padding:9px 12px;background:#161d33}.tbar span{width:11px;height:11px;border-radius:50%}.tbar small{margin-left:8px;color:#94a3b8}
+.tb2{padding:14px 16px;font:13.5px/1.7 ui-monospace,Menlo,monospace;overflow-x:auto;white-space:nowrap}
+.tb2 .k{color:#38bdf8;font-weight:700}.tb2 b{color:#a78bfa}.tb2 .g b{color:#4ade80}.tb2 .u{color:#64748b}.tb2 .pmt b{color:#4ade80}
+.cur{display:inline-block;width:8px;height:15px;background:#d1fae5;vertical-align:-2px;animation:bl 1s steps(1) infinite}@keyframes bl{50%{opacity:0}}
+@media(max-width:900px){.gauges{grid-template-columns:1fr}.vid h1{font-size:24px}}
+@media(prefers-reduced-motion:reduce){.dot,.spin,.cur{animation:none!important}}
 </style>
 </head>
 <body>
@@ -184,14 +220,19 @@ function login(){const r=S.reg;return '<div class="card lgn"><div class="brand">
 function mg(){const v=cur();if(!v){S.vm=0;return dash()}
 v.files=v.files||[];v.ports=v.ports||[];v.subs=v.subs||[];v.ssh=v.ssh||'';v.bk=v.bk||[];
 const bz=['installing','starting','stopping','restarting','reinstalling','restoring'].includes(v.st),
-ab='<div class="acts" style="margin:0 0 12px"><button class="pri" data-a="vstart" '+(bz||v.st=='running'?'disabled':'')+'>&#9654; Start</button><button data-a="vrestart" '+(bz?'disabled':'')+'>&#8635; Restart</button><button data-a="vstop" '+(bz||v.st!='running'?'disabled':'')+'>&#9632; Stop</button><button class="dng" data-a="vreinstall" '+(bz?'disabled':'')+'>&#10227; Reinstall</button></div>'+(bz&&v.step?'<p class="mut">'+e(v.step)+'...</p>':'')+(v.err?'<p class="card" style="color:var(--bad);margin:0 0 12px">'+e(v.err)+'</p>':'');
-const T=[['info','Overview'],['files','Files'],['term','Terminal'],['bk','Backups']].concat(S.me.role=='admin'?[['ports','Ports'],['subs','Subusers'],['set','Settings']]:[]);
+ab='<div class="ab2"><button class="b-go" data-a="vstart" '+(bz||v.st=='running'?'disabled':'')+'><i>&#9654;</i>Start</button><button class="b-rs" data-a="vrestart" '+(bz?'disabled':'')+'><i>&#8635;</i>Restart</button><button class="b-st" data-a="vstop" '+(bz||v.st!='running'?'disabled':'')+'><i>&#9632;</i>Stop</button><button class="b-rl" data-a="vreinstall" '+(bz?'disabled':'')+'><i>&#10227;</i>Reinstall</button></div>'+(bz?'<div class="stp"><span class="spin"></span>'+e(v.step||v.st)+'...</div>':'')+(v.err?'<p class="card" style="color:var(--bad);margin:0 0 12px">'+e(v.err)+'</p>':'');
+const T=[['info','&#9783; Overview'],['files','&#128193; Files'],['term','&#9000; Terminal'],['bk','&#128190; Backups']].concat(S.me.role=='admin'?[['ports','&#128268; Ports'],['subs','&#128101; Subusers'],['set','&#9881; Settings']]:[]);
 const pr=(a,b)=>b?Math.min(100,Math.round(a*100/b)):0,ru=v.st=='running',mt=(v.mem||4)*1024,dt=(v.disk||40)*1024,mu=ru?(v.mem_mb||0):0,du=v.disk_mb||0,cp=ru?(v.cpu_pct||0):0,
 mtr=(t,val,p,lim,c)=>'<div class="mtr"><div class="row" style="justify-content:space-between"><b>'+t+'</b><span>'+val+'</span></div><div class="bar"><i style="width:'+p+'%;background:'+c+'"></i></div><small class="mut">'+lim+'</small></div>',
 fg=(a,b)=>'<div class="fg"><small class="mut">'+a+'</small><b>'+b+'</b></div>',
 host=v.host||(S.brand.name||'nova').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,20)||'nova';
-let h='<div class="vhead"><div class="row" style="gap:14px"><button data-a="back">&larr; Back</button><div><h1 style="margin:0">'+e(v.name)+'</h1><small>'+e(v.plan||'')+' &middot; '+e(nodeName(v.node))+'</small></div></div><span class="pill '+v.st+'">'+v.st+'</span></div><div style="height:12px"></div>'+ab+'<div class="sub">'+T.map(([k,l])=>'<button data-a="mt" data-v="'+k+'" class="'+(S.mt==k?'on':'')+'">'+l+'</button>').join('')+'</div><div class="card">';
-if(S.mt=='info')h+='<h2>Overview</h2><div class="mtrs">'+mtr('CPU',ru?cp+'%':'-',pr(cp,(v.cpus||1)*100),(v.cpus||1)+' vCPU allocated','#6366f1')+mtr('Memory',mu+' MiB',pr(mu,mt),'of '+mt+' MiB','#22c55e')+mtr('Disk',fsz(du*1048576),pr(du,dt),'of '+(v.disk||40)+' GB','#f59e0b')+'</div><div class="fgs">'+fg('Hostname','root@'+e(host))+fg('Panel',e(v.panel||S.brand.name||'Nova Cloud'))+fg('OS',e(OSL[v.os]||OSL.ubuntu22))+fg('CPU',e(v.cpu_name?v.cpu_name+' ('+(v.cpus||1)+')':(v.cpus||1)+' vCPU'))+fg('Type',v.type=='kvm'?'KVM virtual machine':'Docker VPS')+fg('Init',v.sd?'systemd (Panel + Wings ready)':'old container, no systemd. Reinstall to enable')+fg('Node',e(nodeName(v.node)))+fg('Owner',e(userName(v.user)))+fg('Status',e(v.st))+fg('Terminal',v.ssh?'sshx active':'not started')+fg('Ports',v.ports.length+' / '+plim(v))+fg('Backups',v.bk.length+' / '+blim(v))+'</div><div class="acts" style="margin-top:14px"><button class="pri" data-a="mt" data-v="term">Open terminal</button><button data-a="mt" data-v="files">File manager</button></div><small class="mut">Run <code>neofetch</code> inside a VPS created after this update to see its panel limits. Tools like <code>free</code> and <code>htop</code> still show the node numbers.</small>';
+let h='<div class="vh2"><div class="vtop"><button data-a="back">&larr; Back</button><span class="pill '+v.st+'"><span class="dot"></span>'+v.st+'</span></div><div class="vid"><span class="osb">'+e((OSL[v.os]||'U')[0])+'</span><div><h1>'+e(v.name)+'</h1><div class="chips"><span>'+e(OSL[v.os]||OSL.ubuntu22)+'</span><span>'+e(v.plan||'')+'</span><span>Node: '+e(nodeName(v.node))+'</span><span>root@'+e(host)+'</span></div></div></div></div><div style="height:14px"></div>'+ab+'<div class="sub">'+T.map(([k,l])=>'<button data-a="mt" data-v="'+k+'" class="'+(S.mt==k?'on':'')+'">'+l+'</button>').join('')+'</div><div class="card">';
+if(S.mt=='info'){const cn=v.cpu_name?v.cpu_name+' ('+(v.cpus||1)+')':(v.cpus||1)+' vCPU',
+gg=(t,ic,p,val,lim,c)=>'<div class="gg"><div class="gr"><i style="--p:'+p+';--c:'+c+'"></i><b>'+p+'%</b></div><div><small class="mut">'+ic+' '+t+'</small><div class="gv">'+val+'</div><small class="mut">'+lim+'</small></div></div>',
+nf=(k,val)=>'<div><span class="k">'+k+'</span>: '+val+'</div>';
+h+='<div class="gauges">'+gg('CPU','&#9889;',Math.min(100,Math.round(cp/(v.cpus||1))),ru?(Math.round(cp/(v.cpus||1)*10)/10)+'%':'-',(v.cpus||1)+' vCPU allocated','#6366f1')+gg('Memory','&#9638;',pr(mu,mt),mu+' MiB','of '+mt+' MiB','#22c55e')+gg('Disk','&#9707;',pr(du,dt),(du/1024).toFixed(1)+' GB','of '+(v.disk||40)+' GB','#f59e0b')+'</div>'
++'<div class="term"><div class="tbar"><span style="background:#ef4444"></span><span style="background:#f59e0b"></span><span style="background:#22c55e"></span><small>root@'+e(host)+': ~</small></div><div class="tb2"><div class="pmt"><b>$</b> neofetch</div><div class="g"><b>root</b>@<b>'+e(host)+'</b></div><div class="u">---------------</div>'+nf('OS',e(OSL[v.os]||OSL.ubuntu22))+nf('Host',e(v.panel||S.brand.name||'Nova Cloud')+' Docker VPS')+nf('Init',v.sd?'systemd (Panel + Wings ready)':'none, reinstall to enable')+nf('CPU',e(cn))+nf('Memory',mu+'MiB / '+mt+'MiB')+nf('Disk',(du/1024).toFixed(1)+'G / '+(v.disk||40)+'G')+nf('Ports',v.ports.length+' / '+plim(v))+nf('Backups',v.bk.length+' / '+blim(v))+'<div class="pmt"><b>$</b> <span class="cur"></span></div></div></div>'
++'<div class="fgs">'+fg('Owner',e(userName(v.user)))+fg('Node',e(nodeName(v.node)))+fg('Type',v.type=='kvm'?'KVM':'Docker VPS')+fg('Terminal',v.ssh?'sshx active':'not started')+'</div><div class="acts" style="margin-top:14px"><button class="pri" data-a="mt" data-v="term">&#9000; Open terminal</button><button data-a="mt" data-v="files">&#128193; File manager</button></div>';}
 if(S.mt=='files')h+=fm(v);
 if(S.mt=='term')h+='<h2>Terminal (sshx)</h2><p class="mut">Shared terminal in the browser. Send the link to another user to give them access.</p>'+(v.ssh?'<div class="cmd"><a href="'+e(v.ssh)+'" target="_blank" rel="noopener" style="color:var(--ac)">'+e(v.ssh)+'</a></div><div class="acts"><button class="dng" data-a="sshoff">Stop session</button></div>':v.sshwait?'<p class="mut">Generating the link, this takes up to a minute...</p>':'<div class="acts"><button class="pri" data-a="sshon" '+(v.st=='running'?'':'disabled')+'>Generate sshx link</button></div>'+(v.st=='running'?'':'<small>Start the VPS first.</small>'));
 if(S.mt=='ports')h+='<h2>Ports</h2><p class="mut">Ports used on this VPS: <b>'+v.ports.length+' / '+plim(v)+'</b>. The administrator sets how many ports each VPS gets (Settings tab).</p><div class="row"><input id="pp" type="number" min="1" max="65535" placeholder="Port, e.g. 8080"><input id="pl" placeholder="Label"><button class="pri" data-a="addport" '+(v.ports.length>=plim(v)?'disabled':'')+'>Open port</button></div>'+(v.ports.length>=plim(v)?'<small class="mut">Port limit reached. Close a port or raise the limit in Settings.</small>':'')+'<div class="tw"><table><tr><th>Port</th><th>Label</th><th></th></tr>'+v.ports.map((p,i)=>'<tr><td>'+p.p+'</td><td>'+e(p.n)+'</td><td><button class="dng" data-a="delport" data-v="'+i+'">Close</button></td></tr>').join('')+'</table></div>';
