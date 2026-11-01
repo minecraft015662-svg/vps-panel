@@ -1,0 +1,425 @@
+#!/usr/bin/env python3
+"""Nova Cloud panel backend. Python 3 standard library only.
+
+Browser:  /api/login /api/logout /api/state /api/vps /api/vps/<id>/<op>
+Agents:   /api/agent/heartbeat /api/agent/result   (Bearer node token)
+Public:   / (index.html)  /agent.py (node agent, no secrets)
+"""
+import hmac
+import json
+import os
+import re
+import secrets
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+PANEL_DIR = os.environ.get("NOVA_PANEL_DIR", BASE)
+DATA = os.environ.get("NOVA_DATA", os.path.join(BASE, "data.json"))
+PORT = int(os.environ.get("NOVA_PORT", "3000"))
+HOST = os.environ.get("NOVA_HOST", "127.0.0.1")
+ADMIN_USER = os.environ.get("NOVA_ADMIN_USER", "admin")
+ADMIN_PASS = os.environ.get("NOVA_ADMIN_PASS", "admin")
+ONLINE_SECS = 30
+SESSION_SECS = 7 * 24 * 3600
+CMD_TIMEOUT = 1800
+
+BUSY = {"installing", "starting", "stopping", "restarting", "reinstalling"}
+SERVER_OWNED = ("st", "ssh", "err", "cname", "sshwait")
+
+lock = threading.Lock()
+sessions = {}
+
+
+def default_state():
+    return {
+        "users": [{"id": 1, "name": "Admin", "email": "admin", "role": "admin"}],
+        "nodes": [],
+        "vps": [],
+        "nid": 10,
+        "cid": 1,
+        "cmds": [],
+    }
+
+
+def load_state():
+    try:
+        with open(DATA, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        for k, v in default_state().items():
+            d.setdefault(k, v)
+        return d
+    except Exception:
+        return default_state()
+
+
+def save_state():
+    os.makedirs(os.path.dirname(os.path.abspath(DATA)), exist_ok=True)
+    tmp = DATA + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f)
+    os.replace(tmp, DATA)
+
+
+state = load_state()
+
+
+def agent_version():
+    try:
+        with open(os.path.join(PANEL_DIR, "agent.py"), "r", encoding="utf-8") as f:
+            m = re.search(r"^AGENT_VERSION\s*=\s*(\d+)", f.read(), re.M)
+        return int(m.group(1)) if m else 0
+    except OSError:
+        return 0
+
+
+def online(n):
+    return bool(n.get("seen")) and time.time() - n["seen"] <= ONLINE_SECS
+
+
+def find(lst, i):
+    for x in lst:
+        if str(x.get("id")) == str(i):
+            return x
+    return None
+
+
+def view():
+    out = json.loads(json.dumps(state))
+    out.pop("cmds", None)
+    out.pop("cid", None)
+    for n in out["nodes"]:
+        n["status"] = "connecting" if not n.get("seen") else ("online" if online(n) else "offline")
+    return out
+
+
+def enqueue(node_id, op, vps, args):
+    c = {"id": state["cid"], "node": node_id, "vps": vps["id"] if vps else 0,
+         "op": op, "args": args, "status": "pending", "t": time.time()}
+    state["cid"] += 1
+    state["cmds"].append(c)
+    state["cmds"] = state["cmds"][-300:]
+    return c
+
+
+def run_args(v):
+    return {"cname": v["cname"], "name": v["name"], "cpus": v["cpus"], "mem": v["mem"]}
+
+
+def clean_info(d):
+    info = {}
+    for k in ("hostname", "cpus", "mem_mb", "disk_gb", "load", "docker", "kvm"):
+        v = d.get(k)
+        if isinstance(v, (str, int, float, bool)):
+            info[k] = v[:80] if isinstance(v, str) else v
+    return info
+
+
+def create_vps(d):
+    name = str(d.get("name", "")).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", name):
+        raise ValueError("VPS name: 1-32 letters, numbers, - or _")
+    if str(d.get("type", "docker")) != "docker":
+        raise ValueError("Only Docker VPS are supported right now")
+    node = find(state["nodes"], d.get("node"))
+    if not node:
+        raise ValueError("Select a node")
+    if not online(node):
+        raise ValueError("This node is not online")
+    owner = find(state["users"], d.get("user"))
+    cpus = max(1, min(64, int(d.get("cpus") or 2)))
+    mem = max(1, min(1024, int(d.get("mem") or 4)))
+    disk = max(1, min(100000, int(d.get("disk") or 40)))
+    vid = state["nid"]
+    state["nid"] += 1
+    v = {"id": vid, "name": name, "user": owner["id"] if owner else 1, "node": node["id"],
+         "type": "docker", "cpus": cpus, "mem": mem, "disk": disk,
+         "plan": "%d vCPU, %d GB RAM, %d GB disk" % (cpus, mem, disk),
+         "st": "installing", "cname": "nova-%d" % vid, "err": "", "ssh": ""}
+    state["vps"].append(v)
+    enqueue(node["id"], "create", v, run_args(v))
+    save_state()
+    return v
+
+
+def vps_op(vid, op):
+    v = find(state["vps"], vid)
+    if not v:
+        raise LookupError("VPS not found")
+    node = find(state["nodes"], v["node"])
+    if op == "delete":
+        state["vps"].remove(v)
+        if node:
+            enqueue(node["id"], "delete", v, {"cname": v["cname"]})
+        save_state()
+        return v
+    if not node or not online(node):
+        raise ValueError("The node of this VPS is not online")
+    if v["st"] in BUSY:
+        raise ValueError("VPS is busy (%s). Wait for it to finish" % v["st"])
+    st = v["st"]
+    if op == "start":
+        if st == "running":
+            raise ValueError("VPS is already running")
+        v["st"] = "starting"
+        enqueue(node["id"], "start", v, {"cname": v["cname"]})
+    elif op == "stop":
+        if st != "running":
+            raise ValueError("VPS is not running")
+        v["st"] = "stopping"
+        enqueue(node["id"], "stop", v, {"cname": v["cname"]})
+    elif op == "restart":
+        v["st"] = "restarting"
+        enqueue(node["id"], "restart", v, {"cname": v["cname"]})
+    elif op == "reinstall":
+        v["st"] = "reinstalling"
+        enqueue(node["id"], "reinstall", v, run_args(v))
+    elif op == "sshx":
+        if st != "running":
+            raise ValueError("Start the VPS first")
+        if v.get("sshwait"):
+            raise ValueError("A link is already being generated")
+        v["sshwait"] = True
+        v["ssh"] = ""
+        v["err"] = ""
+        enqueue(node["id"], "sshx", v, {"cname": v["cname"]})
+    elif op == "sshx_stop":
+        v["ssh"] = ""
+        enqueue(node["id"], "sshx_stop", v, {"cname": v["cname"]})
+    else:
+        raise LookupError("Unknown action")
+    if op in ("start", "stop", "restart", "reinstall"):
+        v["err"] = ""
+        v["ssh"] = ""
+        v["sshwait"] = False
+    save_state()
+    return v
+
+
+def apply_result(cmd, ok, out):
+    cmd["status"] = "done" if ok else "error"
+    cmd["out"] = out[:500]
+    v = find(state["vps"], cmd["vps"])
+    if not v:
+        return
+    op = cmd["op"]
+    if op in ("create", "start", "restart", "reinstall"):
+        v["st"] = "running" if ok else "error"
+        v["err"] = "" if ok else out[:300]
+    elif op == "stop":
+        v["st"] = "stopped" if ok else "running"
+        v["err"] = "" if ok else out[:300]
+    elif op == "sshx":
+        v["sshwait"] = False
+        v["ssh"] = out if ok else ""
+        v["err"] = "" if ok else out[:300]
+    elif op == "sshx_stop":
+        v["ssh"] = ""
+
+
+def sweep_and_sync(node, containers):
+    now = time.time()
+    for c in state["cmds"]:
+        if c["status"] == "sent" and now - c.get("sent", now) > CMD_TIMEOUT:
+            apply_result(c, False, "Command timed out")
+    if isinstance(containers, dict):
+        for v in state["vps"]:
+            if v["node"] != node["id"] or v["st"] in BUSY:
+                continue
+            s = containers.get(v.get("cname"))
+            if s is not None and v["st"] in ("running", "stopped", "error"):
+                v["st"] = "running" if s == "running" else "stopped"
+                if s != "running":
+                    v["ssh"] = ""
+
+
+class H(BaseHTTPRequestHandler):
+    server_version = "NovaCloud"
+
+    def log_message(self, *a):
+        pass
+
+    def send_json(self, code, obj, headers=None):
+        b = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b)))
+        self.send_header("Cache-Control", "no-store")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(b)
+
+    def send_file(self, name, ctype):
+        try:
+            with open(os.path.join(PANEL_DIR, name), "rb") as f:
+                b = f.read()
+        except OSError:
+            return self.send_json(404, {"error": name + " not found"})
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(b)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(b)
+
+    def body(self, limit=2_000_000):
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > limit:
+            raise ValueError("too large")
+        return json.loads(self.rfile.read(n) or b"{}")
+
+    def sid(self):
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == "nova_sid":
+                return v
+        return ""
+
+    def authed(self):
+        s = self.sid()
+        exp = sessions.get(s)
+        if exp and exp > time.time():
+            return True
+        sessions.pop(s, None)
+        return False
+
+    def agent_node(self):
+        auth = self.headers.get("Authorization", "")
+        tok = auth[7:].strip() if auth.startswith("Bearer ") else ""
+        for n in state["nodes"]:
+            if tok and hmac.compare_digest(str(n.get("token", "")), tok):
+                return n
+        return None
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        if path == "/api/state":
+            if not self.authed():
+                return self.send_json(401, {"error": "login required"})
+            with lock:
+                return self.send_json(200, view())
+        if path in ("/", "/index.html"):
+            return self.send_file("index.html", "text/html; charset=utf-8")
+        if path == "/agent.py":
+            return self.send_file("agent.py", "text/x-python; charset=utf-8")
+        self.send_json(404, {"error": "not found"})
+
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        try:
+            if path == "/api/login":
+                d = self.body(10_000)
+                ok_u = hmac.compare_digest(str(d.get("username", "")), ADMIN_USER)
+                ok_p = hmac.compare_digest(str(d.get("password", "")), ADMIN_PASS)
+                if not (ok_u and ok_p):
+                    time.sleep(0.6)
+                    return self.send_json(401, {"error": "wrong username or password"})
+                s = secrets.token_hex(24)
+                sessions[s] = time.time() + SESSION_SECS
+                return self.send_json(
+                    200, {"ok": True},
+                    {"Set-Cookie": "nova_sid=%s; HttpOnly; SameSite=Strict; Path=/; Max-Age=%d" % (s, SESSION_SECS)},
+                )
+            if path == "/api/logout":
+                sessions.pop(self.sid(), None)
+                return self.send_json(200, {"ok": True}, {"Set-Cookie": "nova_sid=; Path=/; Max-Age=0"})
+
+            if path == "/api/agent/heartbeat":
+                d = self.body(100_000)
+                with lock:
+                    node = self.agent_node()
+                    if not node:
+                        return self.send_json(401, {"error": "unknown node token"})
+                    node["seen"] = time.time()
+                    node["info"] = clean_info(d)
+                    sweep_and_sync(node, d.get("containers"))
+                    cmds = []
+                    for c in state["cmds"]:
+                        if c["node"] == node["id"] and c["status"] == "pending":
+                            c["status"] = "sent"
+                            c["sent"] = time.time()
+                            cmds.append({"id": c["id"], "op": c["op"], "args": c["args"]})
+                    save_state()
+                return self.send_json(200, {"ok": True, "node": node["name"],
+                                            "agent_version": agent_version(), "cmds": cmds})
+            if path == "/api/agent/result":
+                d = self.body(100_000)
+                with lock:
+                    node = self.agent_node()
+                    if not node:
+                        return self.send_json(401, {"error": "unknown node token"})
+                    c = find(state["cmds"], d.get("id"))
+                    if not c or c["node"] != node["id"]:
+                        return self.send_json(404, {"error": "unknown command"})
+                    apply_result(c, bool(d.get("ok")), str(d.get("output", "")))
+                    save_state()
+                return self.send_json(200, {"ok": True})
+
+            if path == "/api/vps" or path.startswith("/api/vps/"):
+                if not self.authed():
+                    return self.send_json(401, {"error": "login required"})
+                with lock:
+                    if path == "/api/vps":
+                        v = create_vps(self.body(10_000))
+                    else:
+                        parts = path.split("/")
+                        if len(parts) != 5:
+                            return self.send_json(404, {"error": "not found"})
+                        v = vps_op(parts[3], parts[4])
+                return self.send_json(200, {"ok": True, "id": v["id"]})
+        except LookupError as e:
+            return self.send_json(404, {"error": str(e)})
+        except ValueError as e:
+            return self.send_json(400, {"error": str(e)})
+        except Exception:
+            return self.send_json(400, {"error": "bad request"})
+        self.send_json(404, {"error": "not found"})
+
+    def do_PUT(self):
+        if self.path.split("?")[0] != "/api/state":
+            return self.send_json(404, {"error": "not found"})
+        if not self.authed():
+            return self.send_json(401, {"error": "login required"})
+        try:
+            d = self.body()
+            users, nodes, vps = d["users"], d["nodes"], d["vps"]
+            if not all(isinstance(x, list) for x in (users, nodes, vps)):
+                raise ValueError
+            with lock:
+                old_nodes = {n["id"]: n for n in state["nodes"]}
+                for n in nodes:
+                    n.pop("status", None)
+                    o = old_nodes.get(n.get("id"))
+                    n["seen"] = o.get("seen") if o else None
+                    n["info"] = o.get("info") if o else None
+                # VPS existence and lifecycle belong to the server
+                node_ids = {n["id"] for n in nodes}
+                new_vps = []
+                incoming = {v.get("id"): v for v in vps if isinstance(v, dict)}
+                for o in state["vps"]:
+                    if o["node"] not in node_ids:
+                        continue
+                    v = incoming.get(o["id"])
+                    if v is None:
+                        new_vps.append(o)
+                        continue
+                    for k in SERVER_OWNED:
+                        if k in o:
+                            v[k] = o[k]
+                        else:
+                            v.pop(k, None)
+                    v["node"] = o["node"]
+                    new_vps.append(v)
+                state["users"], state["nodes"], state["vps"] = users, nodes, new_vps
+                state["nid"] = max(state["nid"], int(d.get("nid", 0)))
+                save_state()
+            return self.send_json(200, {"ok": True})
+        except Exception:
+            return self.send_json(400, {"error": "bad request"})
+
+
+if __name__ == "__main__":
+    print("Nova Cloud panel on http://%s:%d (data: %s)" % (HOST, PORT, DATA), flush=True)
+    ThreadingHTTPServer((HOST, PORT), H).serve_forever()

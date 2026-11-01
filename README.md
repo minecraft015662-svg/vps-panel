@@ -1,56 +1,50 @@
-# VPSForge - Custom VPS Management Panel
+# Nova Cloud
 
-A modern, multi-node VPS control panel supporting KVM, LXC, Docker, LVM, and HVM.
+Your own hosting control panel (vPanel).
 
-## Features
-- Multi-node management (Local + Remote VPS)
-- Create KVM / LXC / Docker VPS instances
-- User management with SSH access & passwords
-- Built-in file manager
-- Modern English UI
-- Easy install / uninstall scripts
-- Deployable on Render (web frontend) + agents on nodes
+## Repo structure (upload exactly like this)
 
-## Quick Start (On a Linux VPS Node)
-
-```bash
-# Make scripts executable
-chmod +x scripts/*.sh
-
-# Install
-sudo bash scripts/install.sh
-
-# Uninstall
-sudo bash scripts/uninstall.sh
+```
+Nova-cloud/
+├── README.md
+├── nova.sh            # installer menu
+└── panel/
+    ├── index.html     # panel UI
+    ├── server.py      # panel backend (Python 3, no extra packages)
+    └── agent.py       # node agent (served to nodes by the panel)
 ```
 
-## Deploy Web Panel on Render
-1. Push this folder to a GitHub repo
-2. Create a new Web Service on Render
-3. Build command: `npm install`
-4. Start command: `node server.js`
-5. Or use Static Site for the `public/` folder
+A flat layout also works: put all 4 files (`index.html`, `server.py`, `agent.py`, `nova.sh`) in the repo root.
 
-## Architecture
-- **Web Panel**: Deploy on Render (or any host)
-- **Agents**: Install on each VPS node via the install script
-- Supports adding remote nodes by IP + SSH credentials
+## Run
 
-## Supported Virtualization
-- **KVM / HVM / HVM9**: Full virtual machines (requires libvirt on node)
-- **LXC**: Lightweight containers
-- **Docker**: Container-based VPS
-- **LVM**: Storage management for disks
+```bash
+curl -fsSL https://raw.githubusercontent.com/minecraft015662-svg/Nova-cloud/main/nova.sh -o nova.sh
+sudo bash nova.sh
+```
 
-## Default Credentials
-- Username: `admin`
-- Password: `admin123`
+Menu:
 
-**Important**: Change the password immediately after first login.
+1. Install: installs nginx + python3, starts the `nova-panel` service, checks the panel
+2. Uninstall: removes everything
+3. Node setup: installs Docker, KVM, lxcfs and the node agent (`nova-node` service)
+4. Update panel: pulls the latest files from GitHub and restarts the panel. Data and login are kept.
+5. Update node agent: re-downloads the agent from the panel (nodes also update it automatically)
 
-## Node Setup
-1. First node is created automatically from the local server where the panel is installed.
-2. To add more nodes: Go to Nodes → Add Remote Node → Enter IP, SSH port, username, and password/key.
+After the first install you can open the menu with `sudo nova`.
 
-## Notes
-This is a starter template. Full production KVM/libvirt integration requires additional packages (`libvirt-daemon-system`, `virt-manager` etc.) on the nodes. Docker and LXC work out of the box after running the installer.
+Login: `admin` / `admin`. Change it in `/etc/nova-cloud/panel.env`, then `systemctl restart nova-panel`.
+
+## Connect a node
+
+1. Panel: Admin panel > Nodes > Create New. The token appears in the list.
+2. On the node VPS: `sudo bash nova.sh`, choose 3, enter the panel URL (e.g. `http://1.2.3.4`) and the token.
+3. The node shows `online` within seconds. It goes `offline` if the agent stops for 30 seconds.
+
+## Status
+
+- Users, nodes and VPS are saved on the server (`/var/lib/nova-cloud/data.json`).
+- Nodes connect for real (agent heartbeat with token).
+- Docker VPS are real: create, Start, Stop, Restart, Reinstall, Delete, and an sshx terminal link. A new VPS is created and left running only after the node finishes installing it.
+- Files, Ports, Subusers and Backups tabs inside a VPS are still only records in the panel. KVM VPS are not supported yet.
+- The panel runs over plain HTTP. Put it behind HTTPS before using real passwords.
