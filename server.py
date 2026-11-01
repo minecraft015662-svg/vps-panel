@@ -304,16 +304,20 @@ def fs_wait(c, timeout=40):
 
 
 def register(d):
-    name = str(d.get("name", "")).strip()[:40]
+    name = str(d.get("username", d.get("name", ""))).strip()
     email = str(d.get("email", "")).strip().lower()[:80]
     pw = str(d.get("password", ""))
-    if not name or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
-        raise ValueError("Enter your name and a valid email")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{3,20}", name):
+        raise ValueError("Username: 3-20 letters, numbers, . - or _")
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise ValueError("Enter a valid email")
     if len(pw) < 6:
         raise ValueError("Password must be at least 6 characters")
     if any(str(u.get("email", "")).lower() == email for u in state["users"]) or email == ADMIN_USER.lower():
         raise ValueError("This email is already registered")
-    u = {"id": state["nid"], "name": name, "email": email, "role": "user", "pw": hash_pw(pw)}
+    if any(str(u.get("username") or u.get("name", "")).lower() == name.lower() for u in state["users"]) or name.lower() == ADMIN_USER.lower():
+        raise ValueError("This username is already taken")
+    u = {"id": state["nid"], "name": name, "username": name, "email": email, "role": "user", "pw": hash_pw(pw)}
     state["nid"] += 1
     state["users"].append(u)
     save_state()
@@ -411,7 +415,7 @@ class H(BaseHTTPRequestHandler):
                             user = find(state["users"], 1)
                         else:
                             for u in state["users"]:
-                                if u["id"] != 1 and u.get("pw") and str(u.get("email", "")).lower() == name.lower() and check_pw(pw, u["pw"]):
+                                if u["id"] != 1 and u.get("pw") and name.lower() in (str(u.get("email", "")).lower(), str(u.get("username") or u.get("name", "")).lower()) and check_pw(pw, u["pw"]):
                                     user = u
                     if not user:
                         time.sleep(0.6)
@@ -535,6 +539,12 @@ class H(BaseHTTPRequestHandler):
                             v.pop(k, None)
                     v["node"] = o["node"]
                     new_vps.append(v)
+                seen = set()
+                for u in users:
+                    for key in (str(u.get("username") or u.get("name", "")).lower(), str(u.get("email", "")).lower()):
+                        if key in seen:
+                            raise ValueError("duplicate username or email")
+                        seen.add(key)
                 old_users = {u["id"]: u for u in state["users"]}
                 for u in users:
                     o = old_users.get(u.get("id"))
