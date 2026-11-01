@@ -5,7 +5,7 @@ Your own hosting control panel (vPanel).
 ## Repo structure (upload exactly like this)
 
 ```
-Nova-cloud/
+vps-panel/
 ├── README.md
 ├── nova.sh            # installer menu
 └── panel/
@@ -19,7 +19,7 @@ A flat layout also works: put all 4 files (`index.html`, `server.py`, `agent.py`
 ## Run
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/minecraft015662-svg/Nova-cloud/main/nova.sh -o nova.sh
+curl -fsSL https://raw.githubusercontent.com/minecraft015662-svg/vps-panel/main/nova.sh -o nova.sh
 sudo bash nova.sh
 ```
 

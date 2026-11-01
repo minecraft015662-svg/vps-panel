@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Nova Cloud installer (Ubuntu / Debian)
 GITHUB_USER="minecraft015662-svg"
-REPO="https://github.com/${GITHUB_USER}/Nova-cloud.git"
+REPO_NAME="vps-panel"
+REPO="https://github.com/${GITHUB_USER}/${REPO_NAME}.git"
 DIR=/opt/nova-cloud
 CONF=/etc/nova-cloud
 DATA=/var/lib/nova-cloud
@@ -15,6 +16,32 @@ banner() {
   echo "  ║            NOVA CLOUD            ║"
   echo "  ╚══════════════════════════════════╝"
   echo -e "\e[0m"
+}
+
+find_panel() {
+  SRV=$(find "$DIR" -name server.py -not -path '*/.git/*' | head -n1)
+  [ -n "$SRV" ] || return 1
+  PDIR=$(dirname "$SRV")
+  [ -f "$PDIR/index.html" ] || return 1
+}
+
+write_service() {
+  cat > /etc/systemd/system/nova-panel.service <<EOF
+[Unit]
+Description=Nova Cloud panel
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 $SRV
+Environment=NOVA_PANEL_DIR=$PDIR
+Environment=NOVA_DATA=$DATA/data.json
+EnvironmentFile=-$CONF/panel.env
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
 }
 
 install_panel() {
@@ -35,21 +62,7 @@ install_panel() {
     printf 'NOVA_ADMIN_USER=admin\nNOVA_ADMIN_PASS=admin\n' > "$CONF/panel.env"
     chmod 600 "$CONF/panel.env"
   fi
-  cat > /etc/systemd/system/nova-panel.service <<EOF
-[Unit]
-Description=Nova Cloud panel
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/python3 $SRV
-Environment=NOVA_PANEL_DIR=$PDIR
-Environment=NOVA_DATA=$DATA/data.json
-EnvironmentFile=-$CONF/panel.env
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
+  write_service
   systemctl daemon-reload
   systemctl enable nova-panel >/dev/null 2>&1
   systemctl restart nova-panel
@@ -125,18 +138,25 @@ EOF
 
 update_panel() {
   [ -d "$DIR/.git" ] || { echo "Panel is not installed. Choose 1 (Install) first."; return; }
-  echo "Downloading the latest version (your data and login are kept)..."
-  git -C "$DIR" fetch --depth 1 origin && git -C "$DIR" reset --hard FETCH_HEAD || { echo "Update failed (check internet and that the repo is public)."; return; }
+  echo "Downloading the latest version from $REPO (data and login are kept)..."
+  git -C "$DIR" remote set-url origin "$REPO"
+  git -C "$DIR" fetch --depth 1 origin main && git -C "$DIR" reset --hard FETCH_HEAD || { echo "Update failed (check internet and that the repo is public)."; return; }
+  find_panel || { echo "server.py + index.html not found in the repo."; return; }
   chmod -R a+rX "$DIR"
   [ -f "$DIR/nova.sh" ] && install -m 755 "$DIR/nova.sh" /usr/local/bin/nova
+  mkdir -p "$CONF" "$DATA"
+  write_service
+  systemctl enable nova-panel >/dev/null 2>&1
   systemctl restart nova-panel
   sleep 2
-  code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/)
+  code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/)
   if [ "$code" = "200" ]; then
-    echo "Panel updated and running. Nodes update their agent automatically."
+    echo "Panel updated and running from: $PDIR"
+    curl -s http://127.0.0.1:3000/ | grep -q 'id="sb"' && echo "UI check: new design is live." || echo "UI check: still the OLD index.html. Check the file in GitHub."
+    echo "Nodes update their agent automatically within a minute."
   else
     echo "Panel check failed (HTTP $code). Logs:"
-    journalctl -u nova-panel -n 8 --no-pager 2>/dev/null
+    journalctl -u nova-panel -n 10 --no-pager 2>/dev/null
   fi
 }
 
@@ -170,6 +190,11 @@ node_setup() {
   echo "Agent service: systemctl status nova-node"
   echo "Docker VPS that run Pterodactyl need the Sysbox runtime (github.com/nestybox/sysbox)."
 }
+
+case "$1" in
+  update) update_panel; exit 0 ;;
+  node-update) update_node; exit 0 ;;
+esac
 
 while true; do
   banner
