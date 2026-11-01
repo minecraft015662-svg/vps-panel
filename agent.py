@@ -5,10 +5,13 @@ Every few seconds it tells the panel it is alive, reports its Docker VPS,
 and runs the commands the panel queued (create, start, stop, restart,
 reinstall, delete, sshx). It updates itself when the panel has a newer agent.
 """
-AGENT_VERSION = 1
+AGENT_VERSION = 2
 
+import base64
 import json
 import os
+import posixpath
+import tempfile
 import re
 import shutil
 import socket
@@ -20,7 +23,7 @@ import urllib.request
 
 CONF = os.environ.get("NOVA_NODE_CONF", "/etc/nova-cloud/node.conf")
 IMAGE = os.environ.get("NOVA_IMAGE", "ubuntu:22.04")
-HB_SECS = 3
+HB_SECS = 1
 
 
 def read_conf():
@@ -88,19 +91,73 @@ def containers():
 
 
 # ---- commands -------------------------------------------------------------
+def step(a, msg):
+    try:
+        api("/api/agent/progress", {"id": a.get("_id"), "msg": msg}, 10)
+    except Exception:
+        pass
+
+
 def op_create(a):
     c = a["cname"]
+    step(a, "Removing old container")
     run(["docker", "rm", "-f", c], 60)
+    step(a, "Downloading the OS image")
+    rc, out = run(["docker", "pull", IMAGE], 1500)
+    if rc:
+        return False, "Image download failed: " + out[-250:]
+    step(a, "Creating the container")
     rc, out = run(["docker", "run", "-d", "--name", c, "--hostname", a.get("name", c),
                    "--cpus", str(a["cpus"]), "--memory", str(a["mem"]) + "g",
                    "--restart", "unless-stopped", "--init", IMAGE, "sleep", "infinity"], 1500)
     if rc:
         return False, out[-300:]
+    step(a, "Installing packages (1-3 minutes)")
     rc, out = run(["docker", "exec", c, "bash", "-c",
-                   "apt-get update -y && DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates procps"], 1500)
+                   "apt-get update -y && DEBIAN_FRONTEND=noninteractive apt-get install -y curl wget nano sudo ca-certificates procps"], 1500)
     if rc:
         return False, "Container created but package install failed: " + out[-250:]
     return True, "created"
+
+
+def fs_ls(a):
+    return _ok(run(["docker", "exec", a["cname"], "find", a["path"], "-maxdepth", "1", "-mindepth", "1",
+                    "-printf", "%y|%s|%T@|%f\n"], 30))
+
+
+def _ok(r):
+    return r[0] == 0, r[1]
+
+
+def fs_get(a):
+    sh = ('[ -f "$1" ] || { echo "Not a file"; exit 1; }; '
+          '[ "$(stat -c %s "$1")" -le 5242880 ] || { echo "File is larger than 5 MB"; exit 1; }; base64 -w0 "$1"')
+    return _ok(run(["docker", "exec", a["cname"], "sh", "-c", sh, "sh", a["path"]], 60))
+
+
+def fs_write(a):
+    raw = base64.b64decode(a["data"])
+    with tempfile.NamedTemporaryFile(delete=False) as t:
+        t.write(raw)
+        tmp = t.name
+    try:
+        rc, out = run(["docker", "cp", tmp, a["cname"] + ":" + a["path"]], 60)
+    finally:
+        os.unlink(tmp)
+    if rc == 0:
+        run(["docker", "exec", a["cname"], "chmod", "644", a["path"]], 20)
+    return rc == 0, out or "saved"
+
+
+def fs_rm(a):
+    p = posixpath.normpath(a["path"])
+    if len([x for x in p.split("/") if x]) < 2:
+        return False, "Refusing to delete a top-level system folder"
+    return _ok(run(["docker", "exec", a["cname"], "rm", "-rf", "--", p], 60))
+
+
+def fs_mkdir(a):
+    return _ok(run(["docker", "exec", a["cname"], "mkdir", "-p", "--", a["path"]], 30))
 
 
 def simple(*args):
@@ -142,12 +199,14 @@ OPS = {
     "delete": simple("docker", "rm", "-f"),
     "sshx": op_sshx,
     "sshx_stop": op_sshx_stop,
+    "fs_ls": fs_ls, "fs_get": fs_get, "fs_write": fs_write, "fs_rm": fs_rm, "fs_mkdir": fs_mkdir,
 }
 locks = {}
 
 
 def worker(cmd):
-    lk = locks.setdefault(cmd["args"].get("cname", ""), threading.Lock())
+    cmd["args"]["_id"] = cmd["id"]
+    lk = threading.Lock() if cmd["op"].startswith("fs_") else locks.setdefault(cmd["args"].get("cname", ""), threading.Lock())
     with lk:
         try:
             ok, out = OPS[cmd["op"]](cmd["args"])
@@ -155,7 +214,7 @@ def worker(cmd):
             ok, out = False, str(e)
     for _ in range(6):
         try:
-            api("/api/agent/result", {"id": cmd["id"], "ok": bool(ok), "output": str(out)[-500:]})
+            api("/api/agent/result", {"id": cmd["id"], "ok": bool(ok), "output": str(out) if cmd["op"].startswith("fs_") else str(out)[-500:]}, 90)
             return
         except Exception:
             time.sleep(3)

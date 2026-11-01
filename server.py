@@ -5,6 +5,7 @@ Browser:  /api/login /api/logout /api/state /api/vps /api/vps/<id>/<op>
 Agents:   /api/agent/heartbeat /api/agent/result   (Bearer node token)
 Public:   / (index.html)  /agent.py (node agent, no secrets)
 """
+import hashlib
 import hmac
 import json
 import os
@@ -26,10 +27,23 @@ SESSION_SECS = 7 * 24 * 3600
 CMD_TIMEOUT = 1800
 
 BUSY = {"installing", "starting", "stopping", "restarting", "reinstalling"}
-SERVER_OWNED = ("st", "ssh", "err", "cname", "sshwait")
+SERVER_OWNED = ("st", "ssh", "err", "cname", "sshwait", "step")
 
 lock = threading.Lock()
-sessions = {}
+sessions = {}  # sid -> (user id, expiry)
+results = {}   # file-manager command id -> (time, ok, output)
+
+
+def hash_pw(pw, salt=None):
+    salt = salt or secrets.token_hex(8)
+    return salt + "$" + hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 100000).hex()
+
+
+def check_pw(pw, h):
+    try:
+        return hmac.compare_digest(hash_pw(pw, h.split("$", 1)[0]), h)
+    except Exception:
+        return False
 
 
 def default_state():
@@ -58,7 +72,7 @@ def save_state():
     os.makedirs(os.path.dirname(os.path.abspath(DATA)), exist_ok=True)
     tmp = DATA + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f)
+        json.dump(dict(state, cmds=[c for c in state["cmds"] if not str(c["op"]).startswith("fs_")]), f)
     os.replace(tmp, DATA)
 
 
@@ -85,12 +99,20 @@ def find(lst, i):
     return None
 
 
-def view():
+def view(user):
     out = json.loads(json.dumps(state))
     out.pop("cmds", None)
     out.pop("cid", None)
+    for u in out["users"]:
+        u.pop("pw", None)
     for n in out["nodes"]:
         n["status"] = "connecting" if not n.get("seen") else ("online" if online(n) else "offline")
+    if user["role"] != "admin":
+        out["users"] = [u for u in out["users"] if u["id"] == user["id"]]
+        out["vps"] = [v for v in out["vps"] if v["user"] == user["id"]]
+        out["nodes"] = [{"id": n["id"], "name": n["name"], "status": n["status"]}
+                        for n in out["nodes"] if any(v["node"] == n["id"] for v in out["vps"])]
+    out["me"] = {"id": user["id"], "name": user["name"], "role": user["role"]}
     return out
 
 
@@ -143,9 +165,9 @@ def create_vps(d):
     return v
 
 
-def vps_op(vid, op):
+def vps_op(vid, op, user):
     v = find(state["vps"], vid)
-    if not v:
+    if not v or (user["role"] != "admin" and (v["user"] != user["id"] or op == "delete")):
         raise LookupError("VPS not found")
     node = find(state["nodes"], v["node"])
     if op == "delete":
@@ -200,9 +222,14 @@ def vps_op(vid, op):
 def apply_result(cmd, ok, out):
     cmd["status"] = "done" if ok else "error"
     cmd["out"] = out[:500]
+    if str(cmd["op"]).startswith("fs_"):
+        results[cmd["id"]] = (time.time(), ok, out)
+        cmd["out"] = ""
+        return
     v = find(state["vps"], cmd["vps"])
     if not v:
         return
+    v["step"] = ""
     op = cmd["op"]
     if op in ("create", "start", "restart", "reinstall"):
         v["st"] = "running" if ok else "error"
@@ -232,6 +259,65 @@ def sweep_and_sync(node, containers):
                 v["st"] = "running" if s == "running" else "stopped"
                 if s != "running":
                     v["ssh"] = ""
+
+
+FS_ACTS = ("ls", "get", "write", "rm", "mkdir")
+
+
+def fs_start(user, vid, d):
+    for k in [k for k, r in results.items() if time.time() - r[0] > 120]:
+        del results[k]
+    v = find(state["vps"], vid)
+    if not v or (user["role"] != "admin" and v["user"] != user["id"]):
+        raise LookupError("VPS not found")
+    node = find(state["nodes"], v["node"])
+    if not node or not online(node):
+        raise ValueError("The node of this VPS is not online")
+    if v["st"] != "running":
+        raise ValueError("Start the VPS first")
+    act = str(d.get("act"))
+    path = str(d.get("path", "/"))
+    if act not in FS_ACTS:
+        raise LookupError("Unknown action")
+    if not path.startswith("/") or "\x00" in path or len(path) > 500:
+        raise ValueError("Bad path")
+    args = {"cname": v["cname"], "path": path}
+    if act == "write":
+        data = str(d.get("data", ""))
+        if len(data) > 7_000_000:
+            raise ValueError("File too large (max 5 MB)")
+        args["data"] = data
+    return enqueue(node["id"], "fs_" + act, v, args)
+
+
+def fs_wait(c, timeout=40):
+    end = time.time() + timeout
+    while time.time() < end:
+        with lock:
+            r = results.pop(c["id"], None)
+        if r:
+            return r[1], r[2]
+        time.sleep(0.15)
+    with lock:
+        c["status"] = "error"
+    return False, "The node did not answer in time"
+
+
+def register(d):
+    name = str(d.get("name", "")).strip()[:40]
+    email = str(d.get("email", "")).strip().lower()[:80]
+    pw = str(d.get("password", ""))
+    if not name or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise ValueError("Enter your name and a valid email")
+    if len(pw) < 6:
+        raise ValueError("Password must be at least 6 characters")
+    if any(str(u.get("email", "")).lower() == email for u in state["users"]) or email == ADMIN_USER.lower():
+        raise ValueError("This email is already registered")
+    u = {"id": state["nid"], "name": name, "email": email, "role": "user", "pw": hash_pw(pw)}
+    state["nid"] += 1
+    state["users"].append(u)
+    save_state()
+    return u
 
 
 class H(BaseHTTPRequestHandler):
@@ -279,11 +365,12 @@ class H(BaseHTTPRequestHandler):
 
     def authed(self):
         s = self.sid()
-        exp = sessions.get(s)
-        if exp and exp > time.time():
-            return True
+        ses = sessions.get(s)
+        if ses and ses[1] > time.time():
+            with lock:
+                return find(state["users"], ses[0])
         sessions.pop(s, None)
-        return False
+        return None
 
     def agent_node(self):
         auth = self.headers.get("Authorization", "")
@@ -296,10 +383,11 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
         if path == "/api/state":
-            if not self.authed():
+            user = self.authed()
+            if not user:
                 return self.send_json(401, {"error": "login required"})
             with lock:
-                return self.send_json(200, view())
+                return self.send_json(200, view(user))
         if path in ("/", "/index.html"):
             return self.send_file("index.html", "text/html; charset=utf-8")
         if path == "/agent.py":
@@ -309,15 +397,27 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         path = self.path.split("?")[0]
         try:
-            if path == "/api/login":
+            if path in ("/api/login", "/api/register"):
                 d = self.body(10_000)
-                ok_u = hmac.compare_digest(str(d.get("username", "")), ADMIN_USER)
-                ok_p = hmac.compare_digest(str(d.get("password", "")), ADMIN_PASS)
-                if not (ok_u and ok_p):
-                    time.sleep(0.6)
-                    return self.send_json(401, {"error": "wrong username or password"})
+                user = None
+                if path == "/api/register":
+                    with lock:
+                        user = register(d)
+                else:
+                    name = str(d.get("username", "")).strip()
+                    pw = str(d.get("password", ""))
+                    with lock:
+                        if hmac.compare_digest(name.encode(), ADMIN_USER.encode()) and hmac.compare_digest(pw.encode(), ADMIN_PASS.encode()):
+                            user = find(state["users"], 1)
+                        else:
+                            for u in state["users"]:
+                                if u["id"] != 1 and u.get("pw") and str(u.get("email", "")).lower() == name.lower() and check_pw(pw, u["pw"]):
+                                    user = u
+                    if not user:
+                        time.sleep(0.6)
+                        return self.send_json(401, {"error": "wrong username or password"})
                 s = secrets.token_hex(24)
-                sessions[s] = time.time() + SESSION_SECS
+                sessions[s] = (user["id"], time.time() + SESSION_SECS)
                 return self.send_json(
                     200, {"ok": True},
                     {"Set-Cookie": "nova_sid=%s; HttpOnly; SameSite=Strict; Path=/; Max-Age=%d" % (s, SESSION_SECS)},
@@ -344,8 +444,19 @@ class H(BaseHTTPRequestHandler):
                     save_state()
                 return self.send_json(200, {"ok": True, "node": node["name"],
                                             "agent_version": agent_version(), "cmds": cmds})
+            if path == "/api/agent/progress":
+                d = self.body(10_000)
+                with lock:
+                    node = self.agent_node()
+                    if not node:
+                        return self.send_json(401, {"error": "unknown node token"})
+                    c = find(state["cmds"], d.get("id"))
+                    v = find(state["vps"], c["vps"]) if c and c["node"] == node["id"] else None
+                    if v:
+                        v["step"] = str(d.get("msg", ""))[:80]
+                return self.send_json(200, {"ok": True})
             if path == "/api/agent/result":
-                d = self.body(100_000)
+                d = self.body(9_000_000)
                 with lock:
                     node = self.agent_node()
                     if not node:
@@ -358,16 +469,27 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json(200, {"ok": True})
 
             if path == "/api/vps" or path.startswith("/api/vps/"):
-                if not self.authed():
+                user = self.authed()
+                if not user:
                     return self.send_json(401, {"error": "login required"})
+                parts = path.split("/")
+                if len(parts) == 5 and parts[4] == "fs":
+                    d = self.body(8_000_000)
+                    with lock:
+                        c = fs_start(user, parts[3], d)
+                    ok, out = fs_wait(c)
+                    if not ok:
+                        return self.send_json(400, {"error": out[:300]})
+                    return self.send_json(200, {"ok": True, "data": out})
                 with lock:
                     if path == "/api/vps":
+                        if user["role"] != "admin":
+                            return self.send_json(403, {"error": "Only an administrator can create a VPS"})
                         v = create_vps(self.body(10_000))
                     else:
-                        parts = path.split("/")
                         if len(parts) != 5:
                             return self.send_json(404, {"error": "not found"})
-                        v = vps_op(parts[3], parts[4])
+                        v = vps_op(parts[3], parts[4], user)
                 return self.send_json(200, {"ok": True, "id": v["id"]})
         except LookupError as e:
             return self.send_json(404, {"error": str(e)})
@@ -380,7 +502,8 @@ class H(BaseHTTPRequestHandler):
     def do_PUT(self):
         if self.path.split("?")[0] != "/api/state":
             return self.send_json(404, {"error": "not found"})
-        if not self.authed():
+        user = self.authed()
+        if not user or user["role"] != "admin":
             return self.send_json(401, {"error": "login required"})
         try:
             d = self.body()
@@ -412,6 +535,16 @@ class H(BaseHTTPRequestHandler):
                             v.pop(k, None)
                     v["node"] = o["node"]
                     new_vps.append(v)
+                old_users = {u["id"]: u for u in state["users"]}
+                for u in users:
+                    o = old_users.get(u.get("id"))
+                    pw = u.pop("pw", None)
+                    if pw:
+                        u["pw"] = hash_pw(str(pw))
+                    elif o and o.get("pw"):
+                        u["pw"] = o["pw"]
+                if not any(u.get("id") == 1 for u in users):
+                    users.insert(0, old_users[1])
                 state["users"], state["nodes"], state["vps"] = users, nodes, new_vps
                 state["nid"] = max(state["nid"], int(d.get("nid", 0)))
                 save_state()
