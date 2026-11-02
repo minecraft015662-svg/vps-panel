@@ -4,8 +4,11 @@
 Every few seconds it tells the panel it is alive, reports its Docker VPS,
 and runs the commands the panel queued (create, start, stop, restart,
 reinstall, delete, sshx). It updates itself when the panel has a newer agent.
+
+VPS are Docker containers that run systemd as PID 1 (privileged, own /var/lib/docker),
+so a full Pterodactyl Panel and Wings can be installed inside them.
 """
-AGENT_VERSION = 5
+AGENT_VERSION = 7
 
 import base64
 import json
@@ -23,9 +26,12 @@ import urllib.request
 
 CONF = os.environ.get("NOVA_NODE_CONF", "/etc/nova-cloud/node.conf")
 IMAGE = os.environ.get("NOVA_IMAGE", "ubuntu:22.04")
-# OS choices the panel offers (all apt based, the install step needs apt-get)
+# OS choices the panel offers
 OS_IMAGES = {"ubuntu20": "ubuntu:20.04", "ubuntu22": "ubuntu:22.04", "ubuntu24": "ubuntu:24.04",
-             "debian11": "debian:11", "debian12": "debian:12"}
+             "debian11": "debian:11", "debian12": "debian:12", "debian13": "debian:13",
+             "rocky9": "rockylinux:9", "alma9": "almalinux:9"}
+RPM_OS = ("rocky9", "alma9")   # dnf based, everything else is apt based
+BASE_REV = "v6"                # bump to rebuild the cached systemd base images
 HB_SECS = 1
 
 
@@ -53,9 +59,9 @@ def api(path, data=None, timeout=15):
         return r.read()
 
 
-def run(cmd, timeout=900):
+def run(cmd, timeout=900, inp=None):
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, input=inp)
         return p.returncode, ((p.stdout or "") + (p.stderr or "")).strip()
     except Exception as e:  # missing docker, timeout, ...
         return 1, str(e)
@@ -118,6 +124,9 @@ nova_mem() {
     echo "${u}MiB / ${NOVA_MEM}MiB"
 }
 nova_disk() { echo "$(du -sxm / 2>/dev/null | cut -f1)MiB / ${NOVA_DISK}GB"; }
+nova_cpu() {
+    if [ -n "$NOVA_CPU_NAME" ]; then echo "${NOVA_CPU_NAME} (${NOVA_CPUS})"; else echo "${NOVA_CPUS} vCPU"; fi
+}
 print_info() {
     info title
     info underline
@@ -127,7 +136,7 @@ print_info() {
     prin "Uptime" "$(nova_uptime)"
     info "Packages" packages
     info "Shell" shell
-    prin "CPU" "${NOVA_CPUS} vCPU"
+    prin "CPU" "$(nova_cpu)"
     prin "Memory" "$(nova_mem)"
     prin "Disk" "$(nova_disk)"
     info cols
@@ -173,74 +182,82 @@ def stats_loop():
         except Exception:
             pass
         n += 1
-        time.sleep(3)
+        time.sleep(1.5)
+
+
+def clean_cpu(raw):
+    return re.sub(r"[^A-Za-z0-9 ._@()/+,-]", "", str(raw or "")).strip()[:60]
 
 
 def put_file(c, path, text):
-    run(["docker", "exec", c, "mkdir", "-p", posixpath.dirname(path)], 20)
+    run(["docker", "exec", c, "mkdir", "-p", posixpath.dirname(path)], 20)   # fails on a stopped VPS, docker cp below still works
     with tempfile.NamedTemporaryFile("w", delete=False) as t:
         t.write(text)
         tmp = t.name
+    os.chmod(tmp, 0o644)
     try:
         return run(["docker", "cp", tmp, c + ":" + path], 30)
     finally:
         os.unlink(tmp)
 
 
-def vol_name(cname):
-    return cname + "-docker"
+def cgroup_v2():
+    return os.path.exists("/sys/fs/cgroup/cgroup.controllers")
 
 
 def docker_run(a, host, image, name):
-    base = ["docker", "run", "-d", "--name", name, "--hostname", host,
-            "--cpus", str(a["cpus"]), "--memory", str(a["mem"]) + "g", "--restart", "unless-stopped"]
-    if not a.get("sysd"):
-        return run(base + ["--init", image, "sleep", "infinity"], 1500)
-    # systemd VPS: systemd is PID 1, the container may run its own Docker (Pterodactyl Wings).
-    # /var/lib/docker is a volume because Docker cannot run on top of the container's overlay filesystem.
-    mid = ["--privileged", "--tmpfs", "/run", "--tmpfs", "/run/lock", "--stop-signal", "SIGRTMIN+3",
-           "-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw", "-v", vol_name(name) + ":/var/lib/docker"]
-    tail = [image, "/sbin/init"]
-    rc, out = run(base + ["--cgroupns=host"] + mid + tail, 1500)
-    if rc and "cgroupns" in out:  # old Docker without --cgroupns
-        run(["docker", "rm", "-f", name], 30)
-        rc, out = run(base + mid + tail, 1500)
-    return rc, out
+    """Start a VPS container. The image's own CMD (/sbin/init = systemd) is PID 1.
+    --privileged + its own /var/lib/docker volume let Docker (and so Wings) run inside the VPS."""
+    cmd = ["docker", "run", "-d", "--name", name, "--hostname", host,
+           "--cpus", str(a["cpus"]), "--memory", str(a["mem"]) + "g",
+           "--restart", "unless-stopped", "--privileged",
+           "--tmpfs", "/run", "--tmpfs", "/run/lock",
+           "-v", name + "-docker:/var/lib/docker"]
+    if cgroup_v2():
+        cmd += ["--cgroupns=private"]
+    else:
+        cmd += ["--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:rw"]
+    return run(cmd + [image], 1500)
 
 
-SYSD_DOCKERFILE = r"""FROM __BASE__
-ENV DEBIAN_FRONTEND=noninteractive container=docker
-RUN apt-get update && apt-get install -y --no-install-recommends systemd systemd-sysv dbus iptables kmod iproute2 \
-    curl wget git tar unzip nano sudo ca-certificates gnupg procps cron python3 docker.io \
- && rm -rf /var/lib/apt/lists/* \
- && mkdir -p /etc/docker && echo '{"bip":"10.88.0.1/24"}' > /etc/docker/daemon.json \
- && systemctl mask systemd-udevd.service systemd-udevd-kernel.socket systemd-udevd-control.socket \
-    systemd-modules-load.service getty.target console-getty.service \
- && systemctl enable docker
-STOPSIGNAL SIGRTMIN+3
-CMD ["/sbin/init"]
-"""
+MASK = ("systemd-udevd.service systemd-udevd-kernel.socket systemd-udevd-control.socket "
+        "systemd-udev-trigger.service systemd-modules-load.service sys-kernel-debug.mount "
+        "sys-kernel-tracing.mount systemd-remount-fs.service getty.target console-getty.service")
 
 
-def build_sysd_image(base):
-    """Ubuntu/Debian images have no systemd, so build one once per OS and reuse it."""
-    tag = "nova-sysd:" + re.sub(r"[^a-z0-9.]+", "-", base.lower()) + "-v2"
+def dockerfile(os_key, image):
+    if os_key in RPM_OS:
+        inst = ("dnf -y install systemd curl wget nano sudo ca-certificates procps-ng iproute iptables "
+                "passwd findutils && dnf clean all")
+        init = "/usr/sbin/init"
+    else:
+        inst = ("apt-get update && apt-get install -y --no-install-recommends systemd systemd-sysv dbus "
+                "curl wget nano sudo ca-certificates procps iproute2 iptables findutils && "
+                "rm -rf /var/lib/apt/lists/*")
+        init = "/sbin/init"
+    return ("FROM %s\nENV container=docker DEBIAN_FRONTEND=noninteractive\nRUN %s\n"
+            "RUN mkdir -p /etc/docker && echo '{\"bip\":\"10.88.0.1/24\"}' > /etc/docker/daemon.json\n"
+            "RUN systemctl mask %s || true\nSTOPSIGNAL SIGRTMIN+3\nCMD [\"%s\"]\n" % (image, inst, MASK, init))
+
+
+def base_image(os_key, image, a):
+    """Build (once per OS) an image that has systemd + the basic tools. Returns (tag, error)."""
+    tag = "nova-base-%s:%s" % (os_key, BASE_REV)
     if run(["docker", "image", "inspect", tag], 30)[0] == 0:
         return tag, ""
-    d = tempfile.mkdtemp()
-    try:
-        with open(os.path.join(d, "Dockerfile"), "w", encoding="utf-8") as f:
-            f.write(SYSD_DOCKERFILE.replace("__BASE__", base))
-        rc, out = run(["docker", "build", "-t", tag, d], 1800)
-    finally:
-        shutil.rmtree(d, ignore_errors=True)
-    return (tag, "") if rc == 0 else ("", "systemd image build failed: " + out[-250:])
+    step(a, "Building the %s systemd image (first time only, 1-3 minutes)" % os_key)
+    rc, out = run(["docker", "build", "--pull", "-t", tag, "-"], 1800, inp=dockerfile(os_key, image))
+    if rc:
+        return None, "Image build failed: " + out[-250:]
+    return tag, ""
 
 
-def wait_systemd(c):
-    for _ in range(30):
-        rc, out = run(["docker", "exec", c, "systemctl", "is-system-running"], 15)
-        if out.strip() in ("running", "degraded"):
+def wait_systemd(c, secs=60):
+    end = time.time() + secs
+    st = ""
+    while time.time() < end:
+        _, st = run(["docker", "exec", c, "systemctl", "is-system-running"], 10)
+        if st.strip() in ("running", "degraded"):
             return True
         time.sleep(2)
     return False
@@ -248,39 +265,32 @@ def wait_systemd(c):
 
 def op_create(a):
     c = a["cname"]
+    os_key = str(a.get("os"))
     panel = re.sub(r"[^A-Za-z0-9 ._-]", "", str(a.get("panel") or "Nova Cloud")).strip()[:30] or "Nova Cloud"
     host = re.sub(r"[^a-z0-9-]", "", str(a.get("host") or "nova").lower())[:30] or "nova"
     step(a, "Removing old container")
     run(["docker", "rm", "-f", c], 60)
-    run(["docker", "volume", "rm", "-f", vol_name(c)], 60)   # reinstall starts with an empty nested Docker
-    image = OS_IMAGES.get(str(a.get("os")), IMAGE)
-    step(a, "Downloading the OS image")
-    rc, out = run(["docker", "pull", image], 1500)
-    if rc:
-        return False, "Image download failed: " + out[-250:]
-    if a.get("sysd"):
-        step(a, "Preparing the systemd image (first time only, 2-5 minutes)")
-        image, err = build_sysd_image(image)
-        if err:
-            return False, err
-    step(a, "Creating the container")
-    rc, out = docker_run(a, host, image, c)
+    run(["docker", "volume", "rm", "-f", c + "-docker"], 60)
+    image = OS_IMAGES.get(os_key, IMAGE)
+    if os_key not in OS_IMAGES:
+        os_key = "ubuntu22"
+    tag, err = base_image(os_key, image, a)
+    if not tag:
+        return False, err
+    step(a, "Creating the container (systemd)")
+    rc, out = docker_run(a, host, tag, c)
     if rc:
         return False, out[-300:]
-    if a.get("sysd"):
-        step(a, "Starting systemd")
-        if not wait_systemd(c):
-            return False, "Container created but systemd did not start. Check that the node allows privileged containers"
-    else:
-        step(a, "Installing packages (1-3 minutes)")
-        rc, out = run(["docker", "exec", c, "bash", "-c",
-                       "apt-get update -y && DEBIAN_FRONTEND=noninteractive apt-get install -y curl wget nano sudo ca-certificates procps"], 1500)
-        if rc:
-            return False, "Container created but package install failed: " + out[-250:]
-    step(a, "Applying panel settings")
-    run(["docker", "exec", c, "bash", "-c", "apt-get update -y; DEBIAN_FRONTEND=noninteractive apt-get install -y neofetch"], 600)
-    env = "NOVA_PANEL='%s'\nNOVA_NAME='%s'\nNOVA_CPUS=%d\nNOVA_MEM=%d\nNOVA_DISK=%d\n" % (
-        panel, host, int(float(a["cpus"])), int(a["mem"]) * 1024, int(a.get("disk") or 40))
+    step(a, "Waiting for systemd to boot")
+    if not wait_systemd(c):
+        return False, "The container started but systemd did not boot. On the node check: docker logs " + c
+    if os_key not in RPM_OS:
+        step(a, "Updating package lists")
+        run(["docker", "exec", c, "bash", "-c", "DEBIAN_FRONTEND=noninteractive apt-get update -y"], 600)
+        step(a, "Applying panel settings")
+        run(["docker", "exec", c, "bash", "-c", "DEBIAN_FRONTEND=noninteractive apt-get install -y neofetch"], 600)
+    env = "NOVA_PANEL='%s'\nNOVA_NAME='%s'\nNOVA_CPUS=%d\nNOVA_MEM=%d\nNOVA_DISK=%d\nNOVA_CPU_NAME='%s'\n" % (
+        panel, host, int(float(a["cpus"])), int(a["mem"]) * 1024, int(a.get("disk") or 40), clean_cpu(a.get("cpu_name")))
     put_file(c, "/etc/nova-vps.env", env)
     put_file(c, "/root/.config/neofetch/config.conf", NEOCONF)
     return True, "created"
@@ -326,18 +336,37 @@ def fs_mkdir(a):
     return _ok(run(["docker", "exec", a["cname"], "mkdir", "-p", "--", a["path"]], 30))
 
 
+def read_file(c, path):
+    """Read a file of a VPS with docker cp (works for running and stopped containers)."""
+    with tempfile.TemporaryDirectory() as d:
+        rc, _ = run(["docker", "cp", c + ":" + path, d + "/f"], 30)
+        if rc:
+            return ""
+        with open(d + "/f", "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+
+def set_env(c, kv):
+    """Change / add NAME=value lines in /etc/nova-vps.env of a VPS."""
+    lines = [l for l in read_file(c, "/etc/nova-vps.env").splitlines() if l.split("=", 1)[0] not in kv]
+    lines += ["%s=%s" % (k, v) for k, v in kv.items()]
+    return put_file(c, "/etc/nova-vps.env", "\n".join(lines) + "\n")
+
+
 def op_resize(a):
-    """Change CPU / RAM of an existing container without touching its data."""
+    """Change CPU / RAM / CPU name of an existing container without touching its data."""
     c = a["cname"]
     cpus, mem, disk = int(float(a["cpus"])), int(a["mem"]), int(a["disk"])
     rc, out = run(["docker", "update", "--cpus", str(cpus), "--memory", "%dg" % mem,
                    "--memory-swap", "%dg" % (mem * 2), c], 120)
     if rc:
         return False, out[-300:]
-    # keep neofetch inside the VPS in sync (ignored when the VPS is stopped)
-    run(["docker", "exec", c, "sh", "-c",
-         "[ -f /etc/nova-vps.env ] && sed -i -e 's/^NOVA_CPUS=.*/NOVA_CPUS=%d/' -e 's/^NOVA_MEM=.*/NOVA_MEM=%d/' "
-         "-e 's/^NOVA_DISK=.*/NOVA_DISK=%d/' /etc/nova-vps.env; true" % (cpus, mem * 1024, disk)], 30)
+    # keep neofetch inside the VPS in sync (also works when the VPS is stopped)
+    kv = {"NOVA_CPUS": str(cpus), "NOVA_MEM": str(mem * 1024), "NOVA_DISK": str(disk)}
+    if a.get("cpu_name") is not None:
+        kv["NOVA_CPU_NAME"] = "'%s'" % clean_cpu(a.get("cpu_name"))
+    set_env(c, kv)
+    put_file(c, "/root/.config/neofetch/config.conf", NEOCONF)   # old VPS get the new CPU line too
     return True, "resized"
 
 
@@ -372,7 +401,7 @@ def op_restore(a):
 
 def op_delete(a):
     rc, out = run(["docker", "rm", "-f", a["cname"]], 120)
-    run(["docker", "volume", "rm", "-f", vol_name(a["cname"])], 60)
+    run(["docker", "volume", "rm", "-f", a["cname"] + "-docker"], 60)
     for img in a.get("imgs") or []:
         run(["docker", "rmi", "-f", img], 120)
     return rc == 0, out[-300:] or "ok"
@@ -540,16 +569,21 @@ OPS = {
     "fs_ls": fs_ls, "fs_get": fs_get, "fs_write": fs_write, "fs_rm": fs_rm, "fs_mkdir": fs_mkdir,
 }
 locks = {}
+RUNNING = [0]   # commands that are running right now
 
 
 def worker(cmd):
     cmd["args"]["_id"] = cmd["id"]
     lk = threading.Lock() if cmd["op"].startswith("fs_") else locks.setdefault(cmd["args"].get("cname", ""), threading.Lock())
-    with lk:
-        try:
-            ok, out = OPS[cmd["op"]](cmd["args"])
-        except Exception as e:
-            ok, out = False, str(e)
+    RUNNING[0] += 1
+    try:
+        with lk:
+            try:
+                ok, out = OPS[cmd["op"]](cmd["args"])
+            except Exception as e:
+                ok, out = False, str(e)
+    finally:
+        RUNNING[0] -= 1
     for _ in range(6):
         try:
             api("/api/agent/result", {"id": cmd["id"], "ok": bool(ok), "output": str(out) if cmd["op"].startswith("fs_") else str(out)[-500:]}, 90)
@@ -559,7 +593,7 @@ def worker(cmd):
 
 
 def self_update():
-    if threading.active_count() > 1:  # commands still running, try again later
+    if RUNNING[0] > 0:  # commands still running, try again later
         return
     try:
         with urllib.request.urlopen(URL + "/agent.py", timeout=20) as r:

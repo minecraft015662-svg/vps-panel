@@ -190,7 +190,7 @@ node_setup() {
   URL="${URL%/}"
   [ -n "$URL" ] && [ -n "$TOKEN" ] || { echo "Both URL and token are required."; return; }
   apt-get update -y && apt-get install -y curl python3 docker.io iptables iproute2 || { echo "Package installation failed"; return; }
-  systemctl enable --now docker || { echo "Docker could not start. Inside a VPS this only works in a Systemd VPS (ask the admin to set the VPS mode)."; return; }
+  systemctl enable --now docker || { echo "Docker could not start. Inside a VPS this only works when systemd runs in it (VPS created by an agent v5 or newer)."; return; }
   if systemd-detect-virt -cq 2>/dev/null; then
     echo "Running inside a container: KVM packages are skipped, Docker VPS will work."
   else
@@ -198,6 +198,12 @@ node_setup() {
     systemctl enable --now libvirtd 2>/dev/null || true
     [ -e /dev/kvm ] || echo "Warning: /dev/kvm not found. KVM needs hardware virtualization. Docker VPS will still work."
   fi
+  mkdir -p /etc/modules-load.d /etc/sysctl.d
+  # modules that Docker inside a VPS (Pterodactyl Wings) needs
+  printf 'overlay\nbr_netfilter\n' > /etc/modules-load.d/nova.conf
+  modprobe overlay 2>/dev/null; modprobe br_netfilter 2>/dev/null
+  printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-nova.conf
+  sysctl --system >/dev/null 2>&1 || true
   umask 077
   mkdir -p "$CONF"
   printf 'PANEL_URL=%s\nTOKEN=%s\n' "$URL" "$TOKEN" > "$CONF/node.conf"
@@ -211,6 +217,8 @@ node_setup() {
     *)   echo "Unexpected answer from the panel (HTTP $code)." ;;
   esac
   echo "Agent service: systemctl status nova-node"
+  echo "VPS on this node run systemd and are privileged, so Pterodactyl Panel + Wings (Docker inside) work in them."
+  echo "Privileged = only give VPS to people you trust."
 }
 
 case "$1" in
